@@ -36,8 +36,38 @@ async function writeJson(path: string, value: unknown, pretty: boolean): Promise
   await rename(tmp, path);
 }
 
-export const loadState = () => readJson<State>(statePath(), emptyState);
-export const loadHistory = () => readJson<History>(historyPath(), emptyHistory);
+/**
+ * Fill in anything a state file written by an older version is missing.
+ *
+ * The data is the only copy — it cannot be re-scraped — so it is carried
+ * forward across format changes rather than reset. Skipping this is not a
+ * theoretical risk: adding the CineStar title cache made the next run crash on
+ * the first newly listed screening, because the field simply was not there.
+ */
+function normalizeState(state: State): State {
+  state.cinemas ??= {};
+  state.halls ??= {};
+  state.films ??= [];
+  state.filmAliases ??= {};
+  state.cineStarTitles ??= {};
+  state.screenings ??= {};
+  state.ramp ??= [];
+  if (!Number.isInteger(state.nextFilmId)) {
+    // Never reuse an id: a collision would silently merge two films.
+    state.nextFilmId = state.films.reduce((max, f) => Math.max(max, f.id), 0) + 1;
+  }
+  return state;
+}
+
+function normalizeHistory(history: History): History {
+  history.days ??= {};
+  history.films ??= {};
+  return history;
+}
+
+export const loadState = async () => normalizeState(await readJson<State>(statePath(), emptyState));
+export const loadHistory = async () =>
+  normalizeHistory(await readJson<History>(historyPath(), emptyHistory));
 
 export async function saveState(state: State): Promise<void> {
   state.updatedAt = new Date().toISOString();
