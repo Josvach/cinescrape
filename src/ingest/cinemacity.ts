@@ -55,6 +55,8 @@ export async function ingestCinemaCity(
 
   /** Halls whose remembered capacity no longer explains the ratios we see. */
   const needsCapacity = new Map<string, { hallKey: string; seatplanId: number; venueId: number }>();
+  /** Screenings parked until their hall's capacity arrives, retried below. */
+  const deferred: { screening: ReturnType<typeof upsertScreening>; hallKey: string; ratio: number }[] = [];
 
   for (const p of presentations) {
     try {
@@ -94,15 +96,19 @@ export async function ingestCinemaCity(
         soldOut: n.soldOut,
       });
 
-      const capacity = state.halls[hallKey]?.capacity ?? null;
-      if (capacity == null) {
-        // Without a capacity the ratio means nothing yet. The screening is
-        // still recorded so it is not lost; the reading arrives next run.
+      const queueCapacity = () =>
         needsCapacity.set(hallKey, {
           hallKey,
           seatplanId: Number(n.hall.seatplanExternalId),
           venueId: Number(n.hall.externalId),
         });
+
+      const capacity = state.halls[hallKey]?.capacity ?? null;
+      if (capacity == null) {
+        // Without a capacity the ratio means nothing yet, so park the screening
+        // and come back to it once the seatplan has been fetched below.
+        queueCapacity();
+        deferred.push({ screening, hallKey, ratio: n.availRatio });
         continue;
       }
 
@@ -111,11 +117,8 @@ export async function ingestCinemaCity(
         // The hall was re-seated since we measured it. Refetch rather than
         // write a seat count we already know is wrong.
         result.staleCapacities += 1;
-        needsCapacity.set(hallKey, {
-          hallKey,
-          seatplanId: Number(n.hall.seatplanExternalId),
-          venueId: Number(n.hall.externalId),
-        });
+        queueCapacity();
+        deferred.push({ screening, hallKey, ratio: n.availRatio });
         continue;
       }
 
@@ -143,6 +146,18 @@ export async function ingestCinemaCity(
       onError: (item, err) => result.errors.push(`seatplan ${item.venueId}: ${String(err)}`),
     },
   );
+
+  // Second pass over the parked screenings. Everything needed is already in
+  // memory, so this costs nothing — and without it the very first run, when no
+  // hall capacity is known yet, would publish an empty dashboard.
+  for (const d of deferred) {
+    const capacity = state.halls[d.hallKey]?.capacity ?? null;
+    if (capacity == null) continue;
+    const { seatsSold, residual } = seatsSoldFromRatio(capacity, d.ratio);
+    if (residual > CAPACITY_RESIDUAL_TOLERANCE) continue;
+    recordReading(state, d.screening, { sold: seatsSold, total: capacity });
+    result.read += 1;
+  }
 
   return result;
 }

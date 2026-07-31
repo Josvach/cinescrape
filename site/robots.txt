@@ -1,0 +1,4 @@
+# A private tool that happens to live on public hosting. Nothing here should
+# turn up in a search result.
+User-agent: *
+Disallow: /
