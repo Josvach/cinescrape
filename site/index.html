@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>CineScrape — živá návštěvnost kin</title>
+    <meta name="description" content="Živá návštěvnost filmů v českých multikinech Cinema City a CineStar." />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f4f2" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#111110" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="CineScrape" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232a78d6'/%3E%3Cpath d='M8 22V10h3.2v12zm6.4 0V10h3.2v12zm6.4 0V10H24v12z' fill='white'/%3E%3C/svg%3E"
+    />
+    <style>
+      /*
+       * Palette slots come from a validated categorical set: slot 1 (blue) and
+       * slot 2 (orange), checked against both surfaces — lightness band, chroma
+       * floor, colourblind separation, normal-vision separation and contrast
+       * all pass in light and dark.
+       */
+      :root {
+        color-scheme: light;
+        --surface-0: #f4f4f2;
+        --surface-1: #fcfcfb;
+        --surface-2: #ececea;
+        --border: #dcdcd8;
+        --text-primary: #0b0b0b;
+        --text-secondary: #52514e;
+        --text-muted: #77766f;
+        --series-1: #2a78d6;
+        --series-2: #eb6834;
+        --warning: #9a6700;
+        --radius: 12px;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:where(:not([data-theme="light"])) {
+          color-scheme: dark;
+          --surface-0: #111110;
+          --surface-1: #1a1a19;
+          --surface-2: #232322;
+          --border: #33332f;
+          --text-primary: #ffffff;
+          --text-secondary: #c3c2b7;
+          --text-muted: #94938a;
+          --series-1: #3987e5;
+          --series-2: #d95926;
+          --warning: #d0a215;
+        }
+      }
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --surface-0: #111110;
+        --surface-1: #1a1a19;
+        --surface-2: #232322;
+        --border: #33332f;
+        --text-primary: #ffffff;
+        --text-secondary: #c3c2b7;
+        --text-muted: #94938a;
+        --series-1: #3987e5;
+        --series-2: #d95926;
+        --warning: #d0a215;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+      body {
+        background: var(--surface-0);
+        color: var(--text-primary);
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        font-size: 15px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+      .page { max-width: 880px; margin: 0 auto; padding: 16px 16px 64px; }
+
+      .masthead {
+        display: flex; align-items: baseline; justify-content: space-between;
+        gap: 12px; padding: 8px 0 20px;
+      }
+      .masthead h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.01em; margin: 0; }
+      .masthead .sub { color: var(--text-muted); font-size: 12px; text-align: right; }
+
+      .card {
+        background: var(--surface-1); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 16px; margin-bottom: 14px;
+      }
+      .card > h2 {
+        font-size: 13px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase;
+        color: var(--text-secondary); margin: 0 0 4px;
+      }
+      .card > .caption { font-size: 12px; color: var(--text-muted); margin: 0 0 14px; }
+
+      .hero {
+        font-variant-numeric: tabular-nums; font-size: clamp(38px, 12vw, 56px);
+        font-weight: 680; letter-spacing: -0.03em; line-height: 1; margin: 6px 0 2px;
+      }
+      .hero-unit { font-size: 13px; color: var(--text-secondary); }
+
+      .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+      @media (min-width: 620px) { .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+      .tile { background: var(--surface-2); border-radius: 10px; padding: 12px; }
+      .tile .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+      .tile .value { font-variant-numeric: tabular-nums; font-size: 21px; font-weight: 620; letter-spacing: -0.02em; margin-top: 3px; }
+      .tile .note { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+      .rank {
+        display: flex; align-items: flex-start; gap: 12px; padding: 11px 0;
+        border-top: 1px solid var(--border); cursor: pointer; width: 100%;
+        background: none; border-left: 0; border-right: 0; border-bottom: 0;
+        text-align: left; color: inherit; font: inherit;
+      }
+      .rank:first-of-type { border-top: none; }
+      .rank .pos { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--text-muted); width: 18px; flex: none; text-align: right; padding-top: 2px; }
+      .rank .body { min-width: 0; flex: 1; }
+      .rank .name { display: block; font-weight: 560; font-size: 14px; line-height: 1.3; overflow-wrap: anywhere; }
+      .rank .meta { display: block; font-size: 11.5px; line-height: 1.35; color: var(--text-muted); margin-top: 1px; }
+      .rank .num { font-variant-numeric: tabular-nums; text-align: right; flex: none; width: 84px; }
+      .rank .num b { display: block; font-size: 16px; font-weight: 640; letter-spacing: -0.01em; line-height: 1.2; }
+      .rank .num span { display: block; font-size: 10.5px; color: var(--text-muted); line-height: 1.3; }
+
+      .sharebar { display: block; height: 4px; border-radius: 2px; background: var(--surface-2); margin-top: 5px; overflow: hidden; }
+      .sharebar > i { display: block; height: 100%; border-radius: 2px; background: var(--series-1); }
+
+      .notice {
+        display: flex; gap: 8px; align-items: flex-start; font-size: 12px;
+        color: var(--text-secondary); background: var(--surface-2);
+        border-radius: 10px; padding: 10px 12px; margin-top: 12px;
+      }
+      .notice.warn { color: var(--warning); }
+
+      table.data { width: 100%; border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+      table.data th, table.data td { text-align: right; padding: 6px 4px; border-top: 1px solid var(--border); white-space: nowrap; }
+      table.data th:first-child, table.data td:first-child { text-align: left; white-space: normal; }
+      table.data th { color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; border-top: none; }
+
+      details.tableview > summary { cursor: pointer; font-size: 12px; color: var(--text-muted); margin-top: 10px; }
+      .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 11.5px; color: var(--text-secondary); margin-top: 10px; }
+      .legend .key { display: inline-flex; align-items: center; gap: 6px; }
+      .legend .swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+
+      .axis { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--text-muted); margin-top: 4px; }
+      .readout { display: flex; align-items: baseline; gap: 8px; min-height: 34px; flex-wrap: wrap; }
+      .readout b { font-size: 24px; font-weight: 640; font-variant-numeric: tabular-nums; }
+      .readout span { font-size: 12px; color: var(--text-muted); }
+
+      .backlink {
+        display: inline-block; font-size: 12.5px; color: var(--text-secondary);
+        margin-bottom: 10px; background: none; border: 0; padding: 0; cursor: pointer; font-family: inherit;
+      }
+      .empty { color: var(--text-muted); font-size: 13px; padding: 18px 0; text-align: center; }
+      h3.sub { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); font-weight: 600; margin: 16px 0 4px; }
+      svg { display: block; overflow: visible; }
+    </style>
+  </head>
+  <body>
+    <main class="page" id="app">
+      <p class="empty">Načítám…</p>
+    </main>
+
+    <script type="module">
+      // The page is a static document: all aggregation already happened during
+      // ingest, so this only fetches one JSON file and draws it.
+      const CZ = "cs-CZ";
+      const nf = new Intl.NumberFormat(CZ);
+      const num = (v) => nf.format(Math.round(v || 0));
+      const pct = (v, d = 0) =>
+        new Intl.NumberFormat(CZ, { style: "percent", maximumFractionDigits: d }).format(v || 0);
+
+      function czk(v) {
+        v = v || 0;
+        if (Math.abs(v) >= 1e6)
+          return new Intl.NumberFormat(CZ, { maximumFractionDigits: 1 }).format(v / 1e6) + " mil. Kč";
+        if (Math.abs(v) >= 1e4)
+          return new Intl.NumberFormat(CZ, { maximumFractionDigits: 0 }).format(v / 1e3) + " tis. Kč";
+        return num(v) + " Kč";
+      }
+
+      const dayFmt = new Intl.DateTimeFormat(CZ, { day: "numeric", month: "numeric" });
+      const wdFmt = new Intl.DateTimeFormat(CZ, { weekday: "short" });
+      // A `YYYY-MM-DD` is a calendar day; anchoring at noon keeps any timezone
+      // from nudging it onto the day before.
+      const dayLabel = (iso) => dayFmt.format(new Date(iso + "T12:00:00Z"));
+      const wdLabel = (iso) => wdFmt.format(new Date(iso + "T12:00:00Z"));
+      const hourLabel = (at) =>
+        new Date(at + ":00:00Z").toLocaleString(CZ, {
+          day: "numeric", month: "numeric", hour: "2-digit", timeZone: "Europe/Prague",
+        });
+      const timeLabel = (iso) =>
+        new Date(iso).toLocaleString(CZ, {
+          day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Prague",
+        });
+
+      const el = (tag, attrs = {}, ...kids) => {
+        const n = document.createElement(tag);
+        for (const [k, v] of Object.entries(attrs)) {
+          if (v === false || v == null) continue;
+          if (k === "class") n.className = v;
+          else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+          else n.setAttribute(k, v);
+        }
+        for (const kid of kids.flat()) {
+          if (kid == null || kid === false) continue;
+          n.append(kid instanceof Node ? kid : String(kid));
+        }
+        return n;
+      };
+      const svgEl = (tag, attrs = {}) => {
+        const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+        for (const [k, v] of Object.entries(attrs)) if (v != null) n.setAttribute(k, v);
+        return n;
+      };
+
+      const app = document.getElementById("app");
+      let LIVE = null;
+      let view = { page: "home", filmId: null };
+
+      // ---------------------------------------------------------------- charts
+
+      /**
+       * Admissions per screening day. One series, so no legend is needed for
+       * identity — but the bars carry two states, played and still selling, and
+       * that is encoded with texture rather than a second hue so it survives
+       * greyscale and colourblind viewing.
+       */
+      function dailyBars(days, today, uid) {
+        if (!days.length) return el("p", { class: "empty" }, "Zatím žádná data — sběr právě začal.");
+
+        const W = 100, H = 42, gap = 0.6;
+        const slot = W / days.length;
+        const barW = Math.max(slot - gap, 0.8);
+        const max = Math.max(...days.map((d) => d.admissions), 1);
+
+        const readout = el("div", { class: "readout" });
+        const strong = el("b");
+        const note = el("span");
+        readout.append(strong, note);
+
+        const show = (i) => {
+          const d = days[i];
+          strong.textContent = num(d.admissions);
+          const bits = [`diváků · ${wdLabel(d.day)} ${dayLabel(d.day)}`];
+          if (d.seatsOffered > 0) bits.push(`${pct(d.admissions / d.seatsOffered)} sálu`);
+          if (d.day > today) bits.push("zatím jen předprodej");
+          else if (d.day === today) bits.push("den ještě běží");
+          note.textContent = bits.join(" · ");
+        };
+
+        const svg = svgEl("svg", {
+          viewBox: `0 0 ${W} ${H}`, width: "100%", height: 132,
+          preserveAspectRatio: "none", role: "img",
+          "aria-label": "Návštěvnost podle dne projekce",
+        });
+        const defs = svgEl("defs");
+        const pat = svgEl("pattern", {
+          id: `presale-${uid}`, width: 2.2, height: 2.2,
+          patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)",
+        });
+        pat.append(
+          svgEl("rect", { width: 2.2, height: 2.2, fill: "var(--surface-2)" }),
+          svgEl("rect", { width: 1.1, height: 2.2, fill: "var(--series-1)" }),
+        );
+        defs.append(pat);
+        svg.append(defs);
+
+        const bars = [];
+        days.forEach((d, i) => {
+          const h = Math.max((d.admissions / max) * (H - 2), d.admissions > 0 ? 1 : 0);
+          const bar = svgEl("rect", {
+            x: i * slot + gap / 2, y: H - h, width: barW, height: h,
+            rx: Math.min(barW / 2.6, 0.9),
+            fill: d.day > today ? `url(#presale-${uid})` : "var(--series-1)",
+          });
+          bars.push(bar);
+          // Hit target is the whole column, not just the drawn bar.
+          const hit = svgEl("rect", {
+            x: i * slot, y: 0, width: slot, height: H, fill: "transparent",
+            tabindex: 0, role: "button",
+            "aria-label": `${dayLabel(d.day)}: ${num(d.admissions)} diváků`,
+          });
+          const focus = () => { show(i); bars.forEach((b, j) => b.setAttribute("opacity", j === i ? 1 : 0.45)); };
+          hit.addEventListener("mouseenter", focus);
+          hit.addEventListener("focus", focus);
+          hit.addEventListener("click", focus);
+          svg.append(bar, hit);
+        });
+        svg.addEventListener("mouseleave", () => {
+          bars.forEach((b) => b.setAttribute("opacity", 1));
+          show(Math.max(days.findIndex((d) => d.day === today), 0));
+        });
+        svg.append(svgEl("line", {
+          x1: 0, y1: H, x2: W, y2: H, stroke: "var(--border)",
+          "stroke-width": 0.4, "vector-effect": "non-scaling-stroke",
+        }));
+
+        show(Math.max(days.findIndex((d) => d.day === today), 0));
+
+        return el("div", {}, readout, svg,
+          el("div", { class: "axis" },
+            el("span", {}, dayLabel(days[0].day)),
+            el("span", {}, dayLabel(days[days.length - 1].day))),
+          el("div", { class: "legend" },
+            el("span", { class: "key" },
+              el("i", { class: "swatch", style: "background:var(--series-1)" }), "odehráno"),
+            el("span", { class: "key" },
+              el("i", { class: "swatch", style: "background:repeating-linear-gradient(45deg,var(--series-1) 0 3px,var(--surface-2) 3px 6px)" }),
+              "v předprodeji")),
+          tableView(
+            ["Den", "Diváci", "Naplnění", "Projekcí"],
+            days.map((d) => [
+              `${wdLabel(d.day)} ${dayLabel(d.day)}${d.day > today ? " (předprodej)" : ""}`,
+              num(d.admissions),
+              d.seatsOffered > 0 ? pct(d.admissions / d.seatsOffered) : "—",
+              num(d.screenings),
+            ]),
+          ),
+        );
+      }
+
+      /**
+       * Cumulative tickets sold over real time — the Social Blade view.
+       * Change over time, one series: a 2px line over a faint fill, crosshair on
+       * hover, and a table for anyone who cannot use the hover layer.
+       */
+      function rampChart(points, uid) {
+        if (points.length < 2)
+          return el("p", { class: "empty" }, "Křivka se objeví, jakmile naběhne pár hodin sběru.");
+
+        let cum = 0;
+        const data = points.map((p) => ({ at: p.at, sold: p.sold, cumulative: (cum += p.sold) }));
+        const W = 100, H = 40;
+        const max = Math.max(...data.map((d) => d.cumulative), 1);
+        const xs = (i) => (i / (data.length - 1)) * W;
+        const ys = (v) => H - (v / max) * (H - 2);
+        const path = data.map((d, i) => `${i ? "L" : "M"}${xs(i)} ${ys(d.cumulative)}`).join(" ");
+
+        const readout = el("div", { class: "readout" });
+        const strong = el("b");
+        const note = el("span");
+        readout.append(strong, note);
+
+        const svg = svgEl("svg", {
+          viewBox: `0 0 ${W} ${H}`, width: "100%", height: 140,
+          preserveAspectRatio: "none", role: "img",
+          "aria-label": "Kumulativní prodej lístků v čase",
+        });
+        const defs = svgEl("defs");
+        const grad = svgEl("linearGradient", { id: `fill-${uid}`, x1: 0, y1: 0, x2: 0, y2: 1 });
+        grad.append(
+          svgEl("stop", { offset: "0%", "stop-color": "var(--series-1)", "stop-opacity": 0.24 }),
+          svgEl("stop", { offset: "100%", "stop-color": "var(--series-1)", "stop-opacity": 0.02 }),
+        );
+        defs.append(grad);
+        svg.append(defs);
+        svg.append(svgEl("path", { d: `${path} L${W} ${H} L0 ${H} Z`, fill: `url(#fill-${uid})` }));
+        svg.append(svgEl("path", {
+          d: path, fill: "none", stroke: "var(--series-1)", "stroke-width": 2,
+          "stroke-linejoin": "round", "stroke-linecap": "round",
+          "vector-effect": "non-scaling-stroke",
+        }));
+
+        const cross = svgEl("line", {
+          stroke: "var(--text-muted)", "stroke-width": 1, "stroke-dasharray": "2 2",
+          "vector-effect": "non-scaling-stroke", opacity: 0,
+        });
+        // A surface ring keeps the marker readable wherever it lands.
+        const dot = svgEl("circle", {
+          r: 4, fill: "var(--series-1)", stroke: "var(--surface-1)",
+          "stroke-width": 2, "vector-effect": "non-scaling-stroke",
+        });
+        svg.append(cross, dot);
+
+        const show = (i, withCross) => {
+          const d = data[i];
+          strong.textContent = num(d.cumulative);
+          note.textContent =
+            `lístků · ${hourLabel(d.at)}` + (d.sold > 0 ? ` · +${num(d.sold)} za hodinu` : "");
+          dot.setAttribute("cx", xs(i));
+          dot.setAttribute("cy", ys(d.cumulative));
+          cross.setAttribute("x1", xs(i)); cross.setAttribute("x2", xs(i));
+          cross.setAttribute("y1", 0); cross.setAttribute("y2", H);
+          cross.setAttribute("opacity", withCross ? 1 : 0);
+        };
+
+        const hit = svgEl("rect", { x: 0, y: 0, width: W, height: H, fill: "transparent" });
+        const move = (clientX, target) => {
+          const box = target.getBoundingClientRect();
+          const ratio = (clientX - box.left) / box.width;
+          show(Math.max(0, Math.min(data.length - 1, Math.round(ratio * (data.length - 1)))), true);
+        };
+        hit.addEventListener("mousemove", (e) => move(e.clientX, e.currentTarget));
+        hit.addEventListener("touchmove", (e) => {
+          move(e.touches[0].clientX, e.currentTarget);
+          e.preventDefault();
+        }, { passive: false });
+        hit.addEventListener("mouseleave", () => show(data.length - 1, false));
+        svg.append(hit);
+        show(data.length - 1, false);
+
+        const peak = Math.max(...data.map((d) => d.sold), 0);
+        return el("div", {}, readout, svg,
+          el("div", { class: "axis" },
+            el("span", {}, hourLabel(data[0].at)),
+            el("span", {}, peak > 0 ? `nejrychlejší hodina: +${num(peak)}` : ""),
+            el("span", {}, "teď")),
+          tableView(
+            ["Hodina", "Prodáno", "Celkem"],
+            [...data].reverse().slice(0, 48).map((d) => [hourLabel(d.at), num(d.sold), num(d.cumulative)]),
+          ),
+        );
+      }
+
+      function tableView(head, rows) {
+        return el("details", { class: "tableview" },
+          el("summary", {}, "Zobrazit jako tabulku"),
+          el("table", { class: "data" },
+            el("thead", {}, el("tr", {}, head.map((h) => el("th", {}, h)))),
+            el("tbody", {}, rows.map((r) => el("tr", {}, r.map((c) => el("td", {}, c)))))));
+      }
+
+      function breakdown(title, rows) {
+        if (!rows.length) return null;
+        return el("div", {},
+          el("h3", { class: "sub" }, title),
+          el("table", { class: "data" },
+            el("thead", {}, el("tr", {},
+              el("th", {}, " "), el("th", {}, "Diváci"), el("th", {}, "Naplnění"))),
+            el("tbody", {}, rows.map((r) => el("tr", {},
+              el("td", {}, r.label),
+              el("td", {}, num(r.admissions)),
+              el("td", {}, r.seatsOffered > 0 ? pct(r.admissions / r.seatsOffered) : "—"))))));
+      }
+
+      // ------------------------------------------------------------------ pages
+
+      function coverageNotices(c) {
+        const rate = c.total > 0 ? c.missed / c.total : 0;
+        const noisy = rate > 0.05;
+        return [
+          el("div", { class: "notice" }, el("span", { "aria-hidden": "true" }, "ⓘ"),
+            el("span", {},
+              "Sledujeme Cinema City a CineStar — 25 multikin, zhruba 55 % návštěvnosti českých kin. " +
+              "Jednosálová kina obsazenost nezveřejňují, takže celostátní čísla tohle nenahrazuje.")),
+          c.total > 0 &&
+            el("div", { class: noisy ? "notice warn" : "notice" },
+              el("span", { "aria-hidden": "true" }, noisy ? "⚠" : "✓"),
+              el("span", {},
+                `Za posledních 7 dní zachyceno ${num(c.total - c.missed)} z ${num(c.total)} projekcí` +
+                (c.missed > 0 ? ` · ${pct(rate, 1)} se nestihlo změřit před začátkem` : "") +
+                (c.partial > 0 ? ` · ${num(c.partial)} má jen starší odečet` : "") + ".")),
+        ].filter(Boolean);
+      }
+
+      function homePage(d) {
+        const top = d.films[0]?.admissions || 0;
+        return el("div", {},
+          el("header", { class: "masthead" },
+            el("h1", {}, "CineScrape"),
+            el("span", { class: "sub" }, "aktualizováno ", timeLabel(d.generatedAt))),
+
+          el("section", { class: "card" },
+            el("h2", {}, "Dnes v kinech"),
+            el("p", { class: "caption" }, "Prodané lístky na dnešní projekce, včetně těch, které ještě neproběhly."),
+            el("div", { class: "hero" }, num(d.totals.today)),
+            el("div", { class: "hero-unit" },
+              "diváků dnes" +
+              (d.totals.todaySeatsOffered > 0
+                ? ` · ${pct(d.totals.today / d.totals.todaySeatsOffered)} naplnění sálů` : "")),
+            el("div", { class: "tiles" },
+              tile("Posledních 7 dní", num(d.totals.week), "diváků"),
+              tile("Předprodej", num(d.totals.upcoming), "na příští dny"),
+              tile("Tržby (odhad)", czk(d.totals.gross), "za sledované období"),
+              tile("Pro filmaře", czk(d.totals.filmmaker), "při 50 % podílu"))),
+
+          el("section", { class: "card" },
+            el("h2", {}, "Návštěvnost po dnech"),
+            el("p", { class: "caption" },
+              "Lístek se počítá ke dni projekce — co se dnes prodá na zítřek, roste v zítřejším sloupci."),
+            dailyBars(d.days, d.today, "home")),
+
+          d.ramp.length > 1 &&
+            el("section", { class: "card" },
+              el("h2", {}, "Jak nabíhá prodej"),
+              el("p", { class: "caption" }, "Kumulativně změřené lístky za všechna kina."),
+              rampChart(d.ramp, "homeramp")),
+
+          el("section", { class: "card" },
+            el("h2", {}, "Žebříček filmů"),
+            el("p", { class: "caption" }, "Za posledních 14 dní plus vše, co je už prodáno dopředu."),
+            d.films.length === 0
+              ? el("p", { class: "empty" }, "Zatím žádná data — sběr právě začal.")
+              : d.films.map((f, i) =>
+                  el("button", { class: "rank", onclick: () => go({ page: "film", filmId: f.id }) },
+                    el("span", { class: "pos" }, i + 1),
+                    el("span", { class: "body" },
+                      el("span", { class: "name" }, f.title),
+                      el("span", { class: "meta" },
+                        [`${num(f.screenings)} projekcí`, `${f.cinemas} kin`, `${pct(f.occupancy)} sálu`,
+                         f.sellouts > 0 && `${f.sellouts}× vyprodáno`,
+                         f.upcoming > 0 && `${num(f.upcoming)} v předprodeji`]
+                          .filter(Boolean).join(" · ")),
+                      el("span", { class: "sharebar" },
+                        el("i", { style: `width:${top ? (f.admissions / top) * 100 : 0}%` }))),
+                    el("span", { class: "num" }, el("b", {}, num(f.admissions)), el("span", {}, "diváků")))),
+          ),
+
+          d.fullest.length > 0 &&
+            el("section", { class: "card" },
+              el("h2", {}, "Nejplnější projekce"),
+              el("p", { class: "caption" }, "Posledních pár dní, sály od 50 míst."),
+              el("table", { class: "data" },
+                el("thead", {}, el("tr", {},
+                  el("th", {}, "Projekce"), el("th", {}, "Diváci"), el("th", {}, "Naplnění"))),
+                el("tbody", {}, d.fullest.map((s) => el("tr", {},
+                  el("td", {}, `${s.film} — ${s.cinema}, ${timeLabel(s.startsAt)}`),
+                  el("td", {}, `${num(s.admissions)}/${num(s.capacity)}`),
+                  el("td", {}, pct(s.admissions / s.capacity))))))),
+
+          ...coverageNotices(d.coverage));
+      }
+
+      function filmPage(d, id) {
+        const f = d.films.find((x) => x.id === id);
+        if (!f) return el("div", {}, backButton(), el("p", { class: "empty" }, "Film nenalezen."));
+
+        const days = d.days
+          .map((day) => ({ ...day, admissions: f.byDay[day.day] || 0, seatsOffered: 0, screenings: 0 }))
+          .filter((day) => day.admissions > 0 || day.day >= d.today);
+        const ramp = Object.entries(f.ramp).sort().map(([at, sold]) => ({ at, sold }));
+
+        return el("div", {},
+          backButton(),
+          el("header", { class: "masthead" }, el("h1", {}, f.title)),
+          f.originalTitle && f.originalTitle !== f.title &&
+            el("p", { style: "margin:-14px 0 16px;font-size:12.5px;color:var(--text-muted)" }, f.originalTitle),
+
+          el("section", { class: "card" },
+            el("h2", {}, "Celková návštěvnost"),
+            el("p", { class: "caption" }, "Prodané lístky napříč Cinema City a CineStar, včetně předprodeje."),
+            el("div", { class: "hero" }, num(f.admissions)),
+            el("div", { class: "hero-unit" },
+              "diváků" + (f.upcoming > 0 ? ` · z toho ${num(f.upcoming)} na budoucí projekce` : "")),
+            el("div", { class: "tiles" },
+              tile("Naplnění sálu", pct(f.occupancy), "průměr"),
+              tile("Diváků / projekci", num(f.perScreening), `${num(f.screenings)} projekcí`),
+              tile("Tržby (odhad)", czk(f.gross), "hrubé"),
+              tile("Pro filmaře", czk(f.filmmaker), "50 % podíl")),
+            el("div", { class: "notice" }, el("span", { "aria-hidden": "true" }, "ⓘ"),
+              el("span", {},
+                "Tržby jsou odhad. CineStar zveřejňuje ceník projekce, u Cinema City počítáme " +
+                "s průměrnou cenou lístku. Ani jedna síť neprozradí, kolik lístků šlo za sníženou " +
+                "cenu, takže skutečná tržba bude o něco nižší."))),
+
+          ramp.length > 1 &&
+            el("section", { class: "card" },
+              el("h2", {}, "Jak nabíhá prodej"),
+              el("p", { class: "caption" }, "Kumulativně změřené lístky po hodinách."),
+              rampChart(ramp, "filmramp")),
+
+          el("section", { class: "card" },
+            el("h2", {}, "Návštěvnost po dnech"),
+            el("p", { class: "caption" }, "Podle dne projekce, ne dne prodeje."),
+            dailyBars(days, d.today, "filmdays")),
+
+          el("section", { class: "card" },
+            el("h2", {}, "Kde se hraje"),
+            el("p", { class: "caption" }, "Návštěvnost a naplnění podle sítě, formátu a kina."),
+            breakdown("Podle sítě", toRows(f.chains)),
+            breakdown("Podle formátu", toRows(f.formats)),
+            breakdown("Nejsilnější kina", f.topCinemas.map((c) => ({ label: c.name, ...c })))));
+      }
+
+      const toRows = (obj) =>
+        Object.entries(obj)
+          .map(([label, v]) => ({ label, ...v }))
+          .sort((a, b) => b.admissions - a.admissions);
+
+      const tile = (label, value, note) =>
+        el("div", { class: "tile" },
+          el("div", { class: "label" }, label),
+          el("div", { class: "value" }, value),
+          el("div", { class: "note" }, note));
+
+      const backButton = () =>
+        el("button", { class: "backlink", onclick: () => go({ page: "home", filmId: null }) },
+          "← zpět na přehled");
+
+      // ------------------------------------------------------------------ router
+
+      function go(next) {
+        view = next;
+        const hash = next.page === "film" ? `#film-${next.filmId}` : "";
+        if (location.hash !== hash) history.pushState(next, "", hash || location.pathname);
+        render();
+        scrollTo(0, 0);
+      }
+
+      function readHash() {
+        const m = location.hash.match(/^#film-(\d+)$/);
+        return m ? { page: "film", filmId: Number(m[1]) } : { page: "home", filmId: null };
+      }
+
+      function render() {
+        app.replaceChildren(
+          view.page === "film" ? filmPage(LIVE, view.filmId) : homePage(LIVE),
+        );
+      }
+
+      addEventListener("popstate", () => { view = readHash(); render(); });
+
+      async function load() {
+        try {
+          // Cache-busted so a phone that kept the page open sees fresh numbers.
+          const res = await fetch(`data/live.json?t=${Date.now()}`, { cache: "no-store" });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          LIVE = await res.json();
+          view = readHash();
+          render();
+        } catch (err) {
+          app.replaceChildren(
+            el("div", { class: "card" },
+              el("h2", {}, "Data se nenačetla"),
+              el("p", { class: "caption" }, String(err)),
+              el("p", { class: "caption" },
+                "Pokud jsi právě nasadil, počkej na první běh sběru — data/live.json ještě nemusí existovat.")),
+          );
+        }
+      }
+
+      load();
+      // Refresh while the page sits open on a phone.
+      addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+      setInterval(() => { if (!document.hidden) load(); }, 5 * 60 * 1000);
+    </script>
+  </body>
+</html>

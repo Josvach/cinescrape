@@ -1,18 +1,15 @@
 /**
- * CineStar ingest, split into two jobs.
+ * CineStar ingest, in two halves.
  *
- * `discoverCineStarSchedule` walks the 13 programme pages and registers any new
- * screening, paying one `event/get` per screening it has never seen. Metadata
+ * `discoverCineStarSchedule` walks the 12 programme pages and registers new
+ * screenings, paying one `event/get` for each one it has never seen. Metadata
  * does not change, so that cost is paid once per screening rather than per poll.
  *
- * `pollCineStarHalls` then works a priority queue of `hall/get` calls until its
- * time budget runs out. It never tries to drain the queue: a cron function has
- * a hard ceiling, and stopping cleanly mid-queue is better than being killed.
+ * `pollCineStarHalls` works a due-queue of `hall/get` calls until its time
+ * budget runs out. It never tries to drain the queue — stopping cleanly
+ * mid-queue and resuming next run is the whole point of `nextPollAt`.
  */
 
-import { and, asc, eq, isNotNull, lte } from "drizzle-orm";
-
-import { db, schema } from "@/db/client";
 import { rateLimited } from "@/lib/http";
 import { businessDay, businessDayFromInstant } from "@/lib/time";
 import {
@@ -25,37 +22,37 @@ import {
   normalizeEvent,
   readOccupancy,
 } from "@/sources/cinestar";
+import { recordReading, resolveFilm, upsertCinema, upsertHall, upsertScreening } from "@/store/mutations";
+import { key, type State } from "@/store/types";
 
-import { recordSnapshot, resolveFilm, upsertCinema, upsertHall, upsertScreening } from "./repo";
-import { nextPollAt, shouldRecordSnapshot } from "./schedule";
+import { nextPollAt } from "@/core/schedule";
 
 /** Minimum gap between requests to api.cinestar.cz. */
 const REQUEST_INTERVAL_MS = 350;
 
 /**
- * The programme pages list events far beyond the sales window (opera relays a
- * year out). Registering those wastes an event/get on something nobody can buy
- * yet, so we only take screenings inside this horizon.
+ * Programme pages list events far beyond the sales window — opera relays a year
+ * out. Registering those spends an `event/get` on something nobody can buy yet.
  */
 const DISCOVERY_HORIZON_DAYS = 45;
 
 export type CsDiscoverResult = {
-  slugsFetched: number;
+  pagesFetched: number;
   eventsSeen: number;
-  eventsRegistered: number;
-  eventsRescheduled: number;
+  registered: number;
+  rescheduled: number;
   errors: string[];
 };
 
-export async function discoverCineStarSchedule(opts: {
-  deadline: number;
-}): Promise<CsDiscoverResult> {
-  const d = db();
+export async function discoverCineStarSchedule(
+  state: State,
+  opts: { deadline: number },
+): Promise<CsDiscoverResult> {
   const result: CsDiscoverResult = {
-    slugsFetched: 0,
+    pagesFetched: 0,
     eventsSeen: 0,
-    eventsRegistered: 0,
-    eventsRescheduled: 0,
+    registered: 0,
+    rescheduled: 0,
     errors: [],
   };
 
@@ -66,7 +63,7 @@ export async function discoverCineStarSchedule(opts: {
     CINESTAR_CINEMAS,
     async (cinema) => {
       const events = await fetchProgramme(cinema.slug);
-      result.slugsFetched += 1;
+      result.pagesFetched += 1;
       for (const e of events) {
         result.eventsSeen += 1;
         const t = e.startsAt.getTime();
@@ -81,37 +78,25 @@ export async function discoverCineStarSchedule(opts: {
     },
   );
 
-  const known = await d
-    .select({
-      externalId: schema.screenings.externalId,
-      startsAt: schema.screenings.startsAt,
-    })
-    .from(schema.screenings)
-    .where(eq(schema.screenings.chain, "cinestar"));
-  const knownStarts = new Map(known.map((r) => [r.externalId, r.startsAt]));
-
-  // The programme payload we already have is authoritative about showtimes, so
-  // a rescheduled screening can be corrected without spending a request on it.
+  const unregistered: string[] = [];
   for (const [eventId, c] of candidates) {
-    const currentStart = knownStarts.get(eventId);
-    if (!currentStart || currentStart.getTime() === c.startsAt.getTime()) continue;
-    await d
-      .update(schema.screenings)
-      .set({
-        startsAt: c.startsAt,
-        screeningDay: businessDayFromInstant(c.startsAt),
-        nextPollAt: nextPollAt(c.startsAt, new Date()),
-        lastSeenAt: new Date(),
-      })
-      .where(
-        and(eq(schema.screenings.chain, "cinestar"), eq(schema.screenings.externalId, eventId)),
-      );
-    result.eventsRescheduled += 1;
+    const existing = state.screenings[key("cinestar", eventId)];
+    if (!existing) {
+      unregistered.push(eventId);
+      continue;
+    }
+    // The programme payload is authoritative about showtimes and we already
+    // have it, so a rescheduled screening is corrected for free.
+    if (new Date(existing.startsAt).getTime() !== c.startsAt.getTime()) {
+      existing.startsAt = c.startsAt.toISOString();
+      existing.day = businessDayFromInstant(c.startsAt);
+      existing.nextPollAt = nextPollAt(c.startsAt, new Date())?.toISOString() ?? null;
+      result.rescheduled += 1;
+    }
   }
 
-  const unregistered = [...candidates.keys()].filter((id) => !knownStarts.has(id));
-  // Nearest showtime first: those are the ones the poller needs soonest, and a
-  // run that hits its deadline resumes here rather than starting over.
+  // Nearest showtime first: a run that hits its deadline resumes here rather
+  // than starting over, so the most urgent screenings are always registered.
   unregistered.sort(
     (a, b) => candidates.get(a)!.startsAt.getTime() - candidates.get(b)!.startsAt.getTime(),
   );
@@ -120,14 +105,14 @@ export async function discoverCineStarSchedule(opts: {
     unregistered,
     async (eventId) => {
       const event = await fetchEvent(eventId);
-      await registerScreening(d, event, candidates.get(eventId)!.cinema);
-      result.eventsRegistered += 1;
+      registerScreening(state, event, candidates.get(eventId)!.cinema);
+      result.registered += 1;
     },
     {
       minIntervalMs: REQUEST_INTERVAL_MS,
       deadline: opts.deadline,
       onError: (eventId, err) => {
-        if (err instanceof EventGoneError) return; // already sold out of the window
+        if (err instanceof EventGoneError) return; // already out of the sales window
         result.errors.push(`event ${eventId}: ${String(err)}`);
       },
     },
@@ -136,47 +121,47 @@ export async function discoverCineStarSchedule(opts: {
   return result;
 }
 
-async function registerScreening(
-  d: ReturnType<typeof db>,
+function registerScreening(
+  state: State,
   event: Awaited<ReturnType<typeof fetchEvent>>,
   cinema: CineStarCinema,
-): Promise<void> {
+): void {
   const n = normalizeEvent(event);
 
-  const cinemaId = await upsertCinema(d, {
+  const cinemaKey = upsertCinema(state, {
     chain: n.chain,
     // Keyed on the numeric cinemaid from the event, named from the programme
-    // page it came from — the event payload itself carries no cinema name.
+    // page it came from — the event payload carries no cinema name.
     externalId: n.cinema.externalId,
     name: cinema.name,
     city: cinema.city,
   });
 
-  const hall = await upsertHall(d, {
-    cinemaId,
+  const hallKey = upsertHall(state, {
+    chain: n.chain,
     externalId: n.hall.externalId,
+    cinemaKey,
     name: n.hall.name,
   });
 
-  const filmId = await resolveFilm(d, {
+  const filmId = resolveFilm(state, {
     chain: n.chain,
     externalId: n.film.externalId,
     title: n.film.title,
     originalTitle: n.film.originalTitle,
   });
 
-  await upsertScreening(d, {
+  upsertScreening(state, {
     chain: n.chain,
     externalId: n.externalId,
     filmId,
-    hallId: hall.id,
+    hallKey,
     startsAt: n.startsAt,
-    screeningDay: businessDay(event.start),
-    capacity: hall.capacity,
-    formatAttrs: n.formatAttrs,
-    languageVersion: n.languageVersion,
+    day: businessDay(event.start),
+    formats: n.formatAttrs,
+    lang: n.languageVersion,
     soldOut: false,
-    // Poll straight away so a newly listed screening gets a baseline snapshot.
+    // Poll straight away so a newly listed screening gets its baseline.
     nextPollAt: new Date(),
   });
 }
@@ -184,68 +169,47 @@ async function registerScreening(
 export type CsPollResult = {
   polled: number;
   gone: number;
+  queued: number;
   errors: string[];
 };
 
-export async function pollCineStarHalls(opts: {
-  deadline: number;
-  batchSize?: number;
-}): Promise<CsPollResult> {
-  const d = db();
-  const result: CsPollResult = { polled: 0, gone: 0, errors: [] };
-  const now = new Date();
+export async function pollCineStarHalls(
+  state: State,
+  opts: { deadline: number; batchSize?: number },
+): Promise<CsPollResult> {
+  const result: CsPollResult = { polled: 0, gone: 0, queued: 0, errors: [] };
+  const now = Date.now();
 
-  const due = await d
-    .select({
-      id: schema.screenings.id,
-      externalId: schema.screenings.externalId,
-      startsAt: schema.screenings.startsAt,
-      currentSeatsSold: schema.screenings.currentSeatsSold,
-      currentAt: schema.screenings.currentAt,
-    })
-    .from(schema.screenings)
-    .where(
-      and(
-        eq(schema.screenings.chain, "cinestar"),
-        // A null `nextPollAt` means the screening has left the queue: either it
-        // already ran, or sales closed and the settle job now owns it.
-        isNotNull(schema.screenings.nextPollAt),
-        lte(schema.screenings.nextPollAt, now),
-      ),
-    )
-    .orderBy(asc(schema.screenings.startsAt))
-    .limit(opts.batchSize ?? 400);
+  const due = Object.entries(state.screenings)
+    .filter(([, s]) => s.chain === "cinestar" && s.nextPollAt !== null)
+    .filter(([, s]) => new Date(s.nextPollAt!).getTime() <= now)
+    // Soonest showtime first — those are the readings we cannot retake.
+    .sort((a, b) => a[1].startsAt.localeCompare(b[1].startsAt))
+    .slice(0, opts.batchSize ?? 400);
+
+  result.queued = due.length;
 
   await rateLimited(
     due,
-    async (row) => {
+    async ([k, screening]) => {
+      const externalId = k.slice("cinestar:".length);
       try {
-        const hall = await fetchHall(row.externalId);
+        const hall = await fetchHall(externalId);
         const occ = readOccupancy(hall);
-        await recordSnapshot(d, {
-          screeningId: row.id,
-          seatsSold: occ.seatsSold,
-          seatsTotal: occ.seatsTotal,
-          recordHistory: shouldRecordSnapshot({
-            previousSeatsSold: row.currentSeatsSold,
-            seatsSold: occ.seatsSold,
-            lastCapturedAt: row.currentAt,
-            startsAt: row.startsAt,
-          }),
+        recordReading(state, screening, {
+          sold: occ.seatsSold,
+          total: occ.seatsTotal,
           priceMin: occ.priceMin,
           priceMax: occ.priceMax,
-          priceSource: occ.priceMin != null ? "chain" : null,
-          nextPollAt: nextPollAt(row.startsAt, new Date()),
         });
+        screening.nextPollAt =
+          nextPollAt(new Date(screening.startsAt), new Date())?.toISOString() ?? null;
         result.polled += 1;
       } catch (err) {
         if (err instanceof EventGoneError) {
-          // Sales are closed. Take it out of the queue and let settle decide
-          // the final figure from whatever snapshots we already have.
-          await d
-            .update(schema.screenings)
-            .set({ nextPollAt: null, lastPolledAt: new Date() })
-            .where(eq(schema.screenings.id, row.id));
+          // Sales are closed. Leave the queue and let settle decide the final
+          // figure from whatever we already captured.
+          screening.nextPollAt = null;
           result.gone += 1;
           return;
         }
@@ -255,7 +219,7 @@ export async function pollCineStarHalls(opts: {
     {
       minIntervalMs: REQUEST_INTERVAL_MS,
       deadline: opts.deadline,
-      onError: (row, err) => result.errors.push(`hall ${row.externalId}: ${String(err)}`),
+      onError: ([k], err) => result.errors.push(`hall ${k}: ${String(err)}`),
     },
   );
 

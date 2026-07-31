@@ -1,8 +1,12 @@
 # CineScrape
 
 Živá návštěvnost filmů v českých multikinech. Sbírá obsazenost jednotlivých
-projekcí z Cinema City a CineStar a ukazuje producentovi, jak jeho filmu nabíhá
-návštěvnost — v reálném čase, ne s týdenním zpožděním jako oficiální data UFD.
+projekcí z Cinema City a CineStar a ukazuje, jak filmu nabíhá návštěvnost —
+v reálném čase, ne s týdenním zpožděním jako oficiální data UFD.
+
+**Žádný server, žádná databáze, žádný účet navíc.** Scraper běží v GitHub
+Actions, data jsou JSON soubory, stránka je jeden statický HTML soubor na
+GitHub Pages. Na telefonu se dá dát „Přidat na plochu" a chová se jako appka.
 
 ## Co to umí
 
@@ -10,8 +14,32 @@ návštěvnost — v reálném čase, ne s týdenním zpožděním jako oficiál
 - **Návštěvnost po dnech projekce** — lístek prodaný dnes na zítřek se počítá
   k zítřku, takže pravá část grafu je předprodej, ne odhad
 - **Křivka nabíhání prodeje** ve stylu Social Blade
-- **Naplnění sálů**, žebříčky, srovnání sítí, měst a formátů
+- **Naplnění sálů**, nejplnější projekce, srovnání sítí, kin a formátů
 - **Odhad tržeb** a podílu pro filmaře
+
+## Rozjetí
+
+1. **Fork nebo push do vlastního repa.** Pro sběr každých 5 minut zdarma musí
+   být repo **veřejné** — v privátním je limit 2 000 minut/měsíc, což stačí
+   tak na dvacetiminutový interval.
+2. **Secret**: `Settings → Secrets and variables → Actions → New secret`,
+   jméno `CINESTAR_API_KEY`, hodnota je klíč z veřejné konfigurace frontendu
+   cinestar.cz. Volitelně proměnná `SCRAPER_CONTACT` s kontaktem na tebe.
+3. **Zapni Pages**: `Settings → Pages → Source: Deploy from a branch`,
+   větev `gh-pages`, složka `/`. Větev vznikne až po prvním běhu.
+4. **Spusť to poprvé ručně**: `Actions → ingest → Run workflow`. Trvá to pár
+   minut, protože si to načítá kapacity všech sálů.
+
+Pak už to jede samo. Adresa je `https://<uživatel>.github.io/<repo>/`.
+
+Lokálně:
+
+```bash
+npm install
+CINESTAR_API_KEY=… npm run ingest -- discover   # sběr
+npm run serve                                    # http://localhost:4000
+npm test
+```
 
 ## Odkud data pocházejí
 
@@ -20,7 +48,7 @@ návštěvnost — v reálném čase, ne s týdenním zpožděním jako oficiál
 | Kin | 13 | 12 |
 | Rozvrh | `GET tickets.cinemacity.cz/api/presentations/` — celá síť jedním anonymním requestem, ~30 dní dopředu | SSR payload `cinestar.cz/cz/<kino>/program`, 12 stránek |
 | Obsazenost | `availRatio` × kapacita sálu | `POST api.cinestar.cz/api/hall/get` — plán sálu sedadlo po sedadle |
-| Kapacita | `GET /api/seats/seatplan` (cachuje se) | délka pole `seats` |
+| Kapacita | `GET /api/seats/seatplan` (načte se jednou) | délka pole `seats` |
 | Ceny | nezveřejňuje → odhad | reálný ceník projekce |
 
 Cinema City udává `availRatio` jako desetinné číslo. Ověřeno na všech 3 401
@@ -34,133 +62,104 @@ stovky jednosálových kin bez společného rezervačního systému, která obsa
 nezveřejňují. Tenhle projekt tedy **není** náhrada celostátních čísel UFD a
 dashboard to říká nahlas.
 
-## Jak to běží
+## Jak to funguje
 
-Čtyři joby, každý s vlastním časovým rozpočtem:
+Jeden příkaz (`npm run ingest`) udělá celý cyklus: načte JSON stav, dotáhne obě
+sítě, uloží stav zpátky a přegeneruje data pro stránku. GitHub Actions ho pouští
+každých 5 minut a výsledek force-pushne na větev `gh-pages`, odkud ho Pages
+servírují. Ta větev je zároveň úložiště — každý běh z ní stav načte a zase ho
+tam uloží.
 
-| Job | Frekvence | Co dělá |
-|---|---|---|
-| `cinemacity` | 5 min | jeden fetch → odečet všech projekcí |
-| `cinestar-halls` | 5 min | prioritní fronta `hall/get` |
-| `cinestar-schedule` | 6 h | nové projekce z programových stránek |
-| `settle` | 5–15 min | uzavření odehraných projekcí + úklid historie |
-
-Jdou spustit dvěma způsoby, které dělají přesně totéž:
-
-- **CLI** — `npm run job cinemacity`. Tudy je běží GitHub Actions.
-- **HTTP** — `/api/cron/<job>`, chráněné `CRON_SECRET`. Pro Vercel Cron nebo
-  jakýkoli externí scheduler.
-
-### Dvě věci, které tvarují celý návrh
+### Tři věci, které tvarují celý návrh
 
 **Data mizí.** Odehraná projekce zmizí z feedu (napozorováno: 3443 → 3428 za
 10 minut) a CineStar u ní vrací `E_API_EVENT_NOT_SHARED`. Finální návštěvnost
-se **nedá dohledat zpětně** — musí se zachytit snapshotem těsně před začátkem.
-Proto se frekvence pollingu s blížícím se představením zrychluje a poslední
-odečet se natvrdo posouvá před čas začátku (`nextPollAt` v `src/ingest/schedule.ts`).
-Každá uzavřená projekce nese `confidence`: `final`, `partial`, nebo `missed` —
-a `missed` se v UI nezamlčuje, jinak by nešlo odlišit „film se neprodával" od
+se **nedá dohledat zpětně** — musí se zachytit odečtem těsně před začátkem.
+Proto se frekvence dotazování s blížícím se představením zrychluje a poslední
+odečet se natvrdo posouvá před čas začátku (`src/core/schedule.ts`). Každá
+uzavřená projekce nese `confidence`: `final`, `partial`, nebo `missed` — a
+`missed` se v UI nezamlčuje, jinak by nešlo odlišit „film se neprodával" od
 „nestihli jsme to změřit".
 
 **Náklady jsou asymetrické.** Cinema City = 1 request na celou síť. CineStar =
 1 request na projekci. Poller proto nikdy nezkouší frontu vyprázdnit; běží
 dokud mu nedojde rozpočet a zbytek dobere příští tik.
 
-**Do historie se zapisuje jen změna.** Cinema City vrací všech ~3 400 projekcí
-při každém běhu, ale mění se jich pár desítek. Naměřeno: 3 401 → **26 zapsaných
-řádků** za běh v ustáleném stavu. Bez toho by databáze rostla o ~29 M řádků
-měsíčně a žádný free tier by nepřežil týden. Živé číslo na projekci se přitom
-aktualizuje vždy — škrtá se jen duplicitní historie. Odečet v okně před
-začátkem projekce se neškrtí nikdy, protože právě ten se stává finálním číslem.
+**Do rampy se počítá jen přírůstek.** Každý odečet se porovná s předchozím a do
+hodinového kbelíku se přičte jen rozdíl. První odečet projekce se nepočítá
+vůbec — to, co se prodalo, než jsme se dívali, není prodej za tuhle hodinu.
+Pokles (storna, uvolněné blokace) se ignoruje, protože to není záporný prodej.
 
-## Hosting zdarma
+### Datové soubory
 
-Vercel Hobby umí cron **jen jednou denně**, což pro data, která je nutné
-zachytit před začátkem projekce, nestačí. Plánování proto neběží na Vercelu:
-
-| Vrstva | Zdarma | Proč zrovna tohle |
+| Soubor | Životnost | Co v něm je |
 |---|---|---|
-| **Scheduler** | GitHub Actions | Pro veřejné repo neomezeně minut. Joby jsou skripty, ne HTTP requesty, takže je netrápí žádný serverless timeout. |
-| **Databáze** | Supabase (500 MB) | Nemá strop na compute-hodiny. Neon free má 100 CU-hodin/měsíc, což při odečtu každých 5 minut nevydrží ani polovinu měsíce — compute se nikdy neuspí. |
-| **Web** | Vercel Hobby / Cloudflare Pages | Dashboard jen čte z DB. |
+| `state.json` | přepisuje se každý běh | vše, co je právě v prodeji, plus nedávná minulost čekající na uzavření |
+| `history.json` | trvale | denní součty na film, po uzavření a složení |
+| `live.json` | odvozený | předpočítané odpovědi pro stránku — jediné, co si telefon stahuje |
 
-Nastavení: v repu `Settings → Secrets and variables → Actions` přidej
-`DATABASE_URL` a `CINESTAR_API_KEY`, volitelně proměnnou `SCRAPER_CONTACT`.
-Workflow `.github/workflows/ingest.yml` se pak rozjede sám.
+Uzavřené projekce se po 10 dnech složí do denních součtů a ze `state.json` se
+smažou. Pracovní sada tak zůstává úměrná tomu, co je zrovna v prodeji, místo
+aby rostla donekonečna. Naměřeno: `state.json` ~1 MB, `live.json` ~27 kB.
 
-Na co si dát pozor:
+## Proč to nejde jako soubor přímo v telefonu
 
-- **Repo musí být veřejné**, aby byly Actions minuty zdarma neomezené.
-  V privátním repu je 2 000 minut/měsíc, což na pětiminutový takt nestačí —
-  tam vyjde tak dvacetiminutový interval.
-- **GitHub plánované workflow odkládá** a při zátěži zahazuje. Takt je „zhruba
-  každých 5 minut", ne přesně. Poller s tím počítá — pracuje frontu podle
-  `next_poll_at`, takže vynechaný tik znamená jen víc práce v tom dalším.
-- **Po 60 dnech bez aktivity v repu se plánovaná workflow vypnou.** Přijde
-  e-mail; když ho přehlédneš, sběr tiše ustane.
-- **Vercel Hobby je jen pro nekomerční použití.** Jakmile z toho bude placený
-  produkt pro producenty, je to porušení jejich podmínek — buď Pro za $20/měsíc,
-  nebo web na Cloudflare Pages, kde komerční použití na free tieru vadí.
-- Supabase free uspí projekt po týdnu nečinnosti; při běžícím sběru k tomu
-  nedojde.
+Obě API blokují prohlížeč přes CORS:
 
-## Rozjetí
+- **Cinema City** neposílá hlavičku `access-control-allow-origin` vůbec.
+- **CineStar** ji posílá jen pro vlastní doménu:
+  `access-control-allow-origin: https://websale.cinestar.cz`.
 
-```bash
-npm install
-cp .env.example .env          # doplň DATABASE_URL, CRON_SECRET, CINESTAR_API_KEY
-npm run db:push
-npm run dev
-```
-
-Cron joby jdou spustit ručně:
-
-```bash
-curl -H "Authorization: Bearer $CRON_SECRET" localhost:3000/api/cron/cinemacity
-```
-
-### Vercel
-
-- **Cron pod 1× denně vyžaduje Vercel Pro.** Hobby plán umí max 2 joby a jen
-  denní frekvenci, což na real-time nestačí.
-- `DATABASE_URL` musí mířit na **pooled** endpoint (Neon). Ingest posílá stovky
-  malých sekvenčních dotazů na běh, takže HTTP driver by rozpočet nestihl.
-- `CRON_SECRET` chrání endpointy — bez něj by kdokoli mohl přes nás zatěžovat
-  API kin.
+Soubor otevřený z `file://` má origin `null`, takže mu prohlížeč fetch
+zablokuje. Scraping proto musí běžet mimo prohlížeč — a jakmile běží v Actions,
+sbírá se historie i když je telefon vypnutý, což lokální soubor nikdy neumí.
 
 ## Testy
 
 ```bash
-npm test        # 56 testů, fixtures ze skutečných odpovědí obou API
+npm test        # 68 testů, fixtures ze skutečných odpovědí obou API
 npm run typecheck
 ```
 
 Fixtures v `src/sources/__fixtures__/` jsou uložené reálné odpovědi, takže testy
 neběží proti živému API. Klíčové testy hlídají převod `availRatio` → prodaná
-sedadla, počítání `OCCUPIED` u CineStar, párování filmů napříč sítěmi a časovou
-zónu včetně přechodů na letní čas.
+sedadla, počítání `OCCUPIED` u CineStar, párování filmů napříč sítěmi, delta
+logiku rampy a časovou zónu včetně přechodů na letní čas.
 
 ## Slušné chování a právní stránka
 
 - **robots.txt obojí povoluje.** CineStar má `User-agent: * / Disallow:` a
   blokuje jmenovitě jen AI crawlery; `tickets.cinemacity.cz` robots.txt nemá.
-  To ale **není** souhlas se scrapingem — před ostrým provozem projdi VOP obou
-  sítí.
+  To ale **není** souhlas se scrapingem — před delším provozem projdi VOP
+  obou sítí.
 - **Sui generis právo k databázi** (§ 88 AZ) chrání jejich programovou databázi.
-  Publikuj **odvozenou analytiku**, ne kopii jejich programu.
-- Crawler se představuje vlastním `User-Agent` (`SCRAPER_CONTACT` v `.env`),
-  drží ~3 req/s a netahá nic navíc.
+  Pro soukromý nástroj je to jiná situace než pro veřejnou publikaci, ale kdyby
+  se z toho někdy stala veřejná služba, publikuj **odvozenou analytiku**, ne
+  kopii jejich programu.
+- Crawler se představuje vlastním `User-Agent` (`SCRAPER_CONTACT`), drží
+  ~3 req/s a netahá nic navíc.
 - `CINESTAR_API_KEY` je veřejná konfigurace jejich frontendu, ale je jejich —
   čte se z env, do gitu nepatří.
 
 ## Známá omezení
 
 - **Tržby jsou odhad.** Ani jedna síť neprozradí, v jaké cenové kategorii se
-  které sedadlo prodalo (dospělý/student/dítě). Skutečná tržba bude nižší než
-  uváděný odhad. Podíl pro filmaře je paušálních 50 % (`FILMMAKER_SHARE`),
-  reálné smlouvy se liší film od filmu a týden od týdne.
-- **Metadata projekcí se po registraci neobnovují** (kromě času začátku, který
-  se bere z programové stránky zdarma). Změna normalizačních pravidel proto
-  vyžaduje backfill starých řádků.
+  které sedadlo prodalo (dospělý/student/dítě). Skutečná tržba bude nižší.
+  Podíl pro filmaře je paušálních 50 % (`FILMMAKER_SHARE`), reálné smlouvy se
+  liší film od filmu a týden od týdne.
+- **Metadata projekcí se po registraci neobnovují**, kromě času začátku, který
+  se bere z programové stránky zdarma.
 - Historie se nedá získat zpětně — křivky a trendy dávají smysl až po několika
   dnech sběru.
+- Pokud by repo bylo 60 dní bez aktivity, GitHub plánovaná workflow vypne.
+
+## Předchozí verze
+
+Verze s Postgresem, Next.js a nasazením na Vercel je commit `636b53d`:
+
+```bash
+git checkout 636b53d
+```
+
+Dávala smysl pro veřejný produkt s více uživateli. Pro soukromý nástroj přidávala
+tři služby, tři přihlášení a placený plán navíc, aniž by dělala něco víc.

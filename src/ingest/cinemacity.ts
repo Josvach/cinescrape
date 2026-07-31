@@ -1,12 +1,11 @@
 /**
  * Cinema City ingest.
  *
- * One request covers the entire chain, so this job snapshots every screening on
- * every run. The only extra traffic is a seatplan fetch per hall, which happens
- * once and is then cached — capacity is a property of the hall, not the show.
+ * One request covers the entire chain, so every screening is re-read on every
+ * run. The only extra traffic is a seatplan fetch per hall, which happens once
+ * and is then remembered — capacity belongs to the hall, not to the showing.
  */
 
-import { db } from "@/db/client";
 import { rateLimited } from "@/lib/http";
 import {
   CAPACITY_RESIDUAL_TOLERANCE,
@@ -15,36 +14,37 @@ import {
   normalize,
   seatsSoldFromRatio,
 } from "@/sources/cinemacity";
-
-import { recordSnapshot, resolveFilm, setHallCapacity, upsertCinema, upsertHall, upsertScreening } from "./repo";
-import { shouldRecordSnapshot } from "./schedule";
+import {
+  recordReading,
+  resolveFilm,
+  setHallCapacity,
+  upsertCinema,
+  upsertHall,
+  upsertScreening,
+} from "@/store/mutations";
+import type { State } from "@/store/types";
 
 /**
- * Cinema City publishes no prices in the feed, so revenue for this chain is an
- * estimate. Kept as a single knob rather than scattered through the stats code.
+ * Cinema City publishes no prices, so its revenue figure is an estimate. One
+ * knob, stated once, rather than a number scattered through the stats code.
  */
 export const CC_ESTIMATED_TICKET_PRICE_CZK = 205;
 
 export type CcIngestResult = {
   presentations: number;
-  /** Readings appended to the history. */
-  snapshots: number;
-  /** Readings that moved the live figure but were too minor to keep. */
-  liveOnlyUpdates: number;
-  /** Screenings that had not moved at all — no write of any kind. */
-  unchanged: number;
+  read: number;
   capacityFetches: number;
   staleCapacities: number;
   errors: string[];
 };
 
-export async function ingestCinemaCity(opts: { deadline: number }): Promise<CcIngestResult> {
-  const d = db();
+export async function ingestCinemaCity(
+  state: State,
+  opts: { deadline: number },
+): Promise<CcIngestResult> {
   const result: CcIngestResult = {
     presentations: 0,
-    snapshots: 0,
-    liveOnlyUpdates: 0,
-    unchanged: 0,
+    read: 0,
     capacityFetches: 0,
     staleCapacities: 0,
     errors: [],
@@ -53,130 +53,87 @@ export async function ingestCinemaCity(opts: { deadline: number }): Promise<CcIn
   const presentations = await fetchPresentations();
   result.presentations = presentations.length;
 
-  const cinemaIds = new Map<string, number>();
-  const hallIds = new Map<string, { id: number; capacity: number | null }>();
-  const filmIds = new Map<string, number>();
-  /** Halls whose cached capacity no longer explains the ratios we are seeing. */
-  const needsCapacity = new Map<string, { hallId: number; seatplanId: number; venueId: number }>();
+  /** Halls whose remembered capacity no longer explains the ratios we see. */
+  const needsCapacity = new Map<string, { hallKey: string; seatplanId: number; venueId: number }>();
 
   for (const p of presentations) {
-    if (Date.now() >= opts.deadline) {
-      result.errors.push("deadline reached before the feed was fully ingested");
-      break;
-    }
-
     try {
       const n = normalize(p);
 
-      let cinemaId = cinemaIds.get(n.cinema.externalId);
-      if (cinemaId === undefined) {
-        cinemaId = await upsertCinema(d, {
-          chain: n.chain,
-          externalId: n.cinema.externalId,
-          name: n.cinema.name,
-          city: n.cinema.city,
-        });
-        cinemaIds.set(n.cinema.externalId, cinemaId);
-      }
+      const cinemaKey = upsertCinema(state, {
+        chain: n.chain,
+        externalId: n.cinema.externalId,
+        name: n.cinema.name,
+        city: n.cinema.city,
+      });
 
-      const hallKey = `${cinemaId}:${n.hall.externalId}`;
-      let hall = hallIds.get(hallKey);
-      if (hall === undefined) {
-        const row = await upsertHall(d, {
-          cinemaId,
-          externalId: n.hall.externalId,
-          name: n.hall.name,
-          seatplanExternalId: n.hall.seatplanExternalId,
-        });
-        hall = { id: row.id, capacity: row.capacity };
-        hallIds.set(hallKey, hall);
-      }
+      const hallKey = upsertHall(state, {
+        chain: n.chain,
+        externalId: n.hall.externalId,
+        cinemaKey,
+        name: n.hall.name,
+        seatplanId: n.hall.seatplanExternalId,
+      });
 
-      let filmId = filmIds.get(n.film.externalId);
-      if (filmId === undefined) {
-        filmId = await resolveFilm(d, {
-          chain: n.chain,
-          externalId: n.film.externalId,
-          title: n.film.title,
-          originalTitle: n.film.originalTitle,
-        });
-        filmIds.set(n.film.externalId, filmId);
-      }
+      const filmId = resolveFilm(state, {
+        chain: n.chain,
+        externalId: n.film.externalId,
+        title: n.film.title,
+        originalTitle: n.film.originalTitle,
+      });
 
-      // Without a capacity the ratio means nothing yet; queue the seatplan and
-      // still record the screening so it is not lost.
-      if (hall.capacity == null) {
-        needsCapacity.set(hallKey, {
-          hallId: hall.id,
-          seatplanId: Number(n.hall.seatplanExternalId),
-          venueId: Number(n.hall.externalId),
-        });
-      }
-
-      const screening = await upsertScreening(d, {
+      const screening = upsertScreening(state, {
         chain: n.chain,
         externalId: n.externalId,
         filmId,
-        hallId: hall.id,
+        hallKey,
         startsAt: n.startsAt,
-        screeningDay: n.screeningDay,
-        capacity: hall.capacity,
-        formatAttrs: n.formatAttrs,
-        languageVersion: n.languageVersion,
+        day: n.screeningDay,
+        formats: n.formatAttrs,
+        lang: n.languageVersion,
         soldOut: n.soldOut,
-        priceSource: "estimate",
       });
 
-      if (hall.capacity != null) {
-        const { seatsSold, residual } = seatsSoldFromRatio(hall.capacity, n.availRatio);
-        if (residual > CAPACITY_RESIDUAL_TOLERANCE) {
-          // The hall was re-seated since we cached it. Refetch rather than
-          // writing a seat count we know is wrong.
-          result.staleCapacities += 1;
-          needsCapacity.set(hallKey, {
-            hallId: hall.id,
-            seatplanId: Number(n.hall.seatplanExternalId),
-            venueId: Number(n.hall.externalId),
-          });
-          continue;
-        }
-        const recordHistory = shouldRecordSnapshot({
-          previousSeatsSold: screening.currentSeatsSold,
-          seatsSold,
-          lastCapturedAt: screening.currentAt,
-          startsAt: n.startsAt,
+      const capacity = state.halls[hallKey]?.capacity ?? null;
+      if (capacity == null) {
+        // Without a capacity the ratio means nothing yet. The screening is
+        // still recorded so it is not lost; the reading arrives next run.
+        needsCapacity.set(hallKey, {
+          hallKey,
+          seatplanId: Number(n.hall.seatplanExternalId),
+          venueId: Number(n.hall.externalId),
         });
-
-        // Nothing moved and nothing is due: skip the write entirely. This is
-        // the common case for most of the feed on any given run.
-        if (!recordHistory && seatsSold === screening.currentSeatsSold) {
-          result.unchanged += 1;
-          continue;
-        }
-
-        await recordSnapshot(d, {
-          screeningId: screening.id,
-          seatsSold,
-          seatsTotal: hall.capacity,
-          recordHistory,
-        });
-        if (recordHistory) result.snapshots += 1;
-        else result.liveOnlyUpdates += 1;
+        continue;
       }
+
+      const { seatsSold, residual } = seatsSoldFromRatio(capacity, n.availRatio);
+      if (residual > CAPACITY_RESIDUAL_TOLERANCE) {
+        // The hall was re-seated since we measured it. Refetch rather than
+        // write a seat count we already know is wrong.
+        result.staleCapacities += 1;
+        needsCapacity.set(hallKey, {
+          hallKey,
+          seatplanId: Number(n.hall.seatplanExternalId),
+          venueId: Number(n.hall.externalId),
+        });
+        continue;
+      }
+
+      recordReading(state, screening, { sold: seatsSold, total: capacity });
+      result.read += 1;
     } catch (err) {
       result.errors.push(`presentation ${p.id}: ${String(err)}`);
     }
   }
 
-  // Fetch missing capacities last so a slow seatplan endpoint cannot starve the
-  // feed ingest. They are picked up on the next run.
-  const pending = [...needsCapacity.values()];
+  // Capacities last, so a slow seatplan endpoint cannot starve the feed ingest.
+  // Whatever does not fit in the budget is picked up on the next run.
   await rateLimited(
-    pending,
+    [...needsCapacity.values()],
     async (item) => {
       const capacity = await fetchHallCapacity(item.seatplanId, item.venueId);
       if (capacity > 0) {
-        await setHallCapacity(d, item.hallId, capacity);
+        setHallCapacity(state, item.hallKey, capacity);
         result.capacityFetches += 1;
       }
     },

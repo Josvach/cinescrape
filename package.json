@@ -1,31 +1,17 @@
 {
   "name": "cinescrape",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "ingest": "tsx src/cli/run.ts",
+    "serve": "node scripts/serve.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "db:generate": "drizzle-kit generate",
-    "db:push": "drizzle-kit push",
-    "job": "tsx src/cli/run-job.ts"
-  },
-  "dependencies": {
-    "drizzle-orm": "^0.45.2",
-    "next": "^16.2.12",
-    "pg": "^8.22.0",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
-    "@types/pg": "^8.20.0",
-    "@types/react": "^19.2.0",
-    "@types/react-dom": "^19.2.0",
-    "drizzle-kit": "^0.31.10",
     "tsx": "^4.23.1",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"

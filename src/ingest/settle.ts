@@ -1,139 +1,137 @@
 /**
- * Freezing the final admissions figure for screenings that have already run.
+ * Freezing final admissions, and moving them out of the working set.
  *
  * Neither chain lets us read a screening once it has started, and both drop it
- * from their feeds shortly afterwards. Whatever we captured before showtime is
- * therefore the permanent record, and this job writes it down together with an
- * honest confidence flag rather than pretending every number is equally good.
+ * from their feeds soon after. Whatever we captured before showtime is the
+ * permanent record, so it is written down together with an honest confidence
+ * flag rather than pretending every number is equally solid.
+ *
+ * Settled screenings are then folded into `history.json` as per-day, per-film
+ * totals and deleted from `state.json`. That is what keeps the working set
+ * proportional to what is currently on sale instead of growing forever.
  */
 
-import { and, desc, eq, isNull, lt, sql } from "drizzle-orm";
+import { settleConfidence } from "@/core/schedule";
+import { CC_ESTIMATED_TICKET_PRICE_CZK } from "@/ingest/cinemacity";
+import type { History, HistoryDay, State } from "@/store/types";
 
-import { db, schema } from "@/db/client";
-
-import { settleConfidence } from "./schedule";
+/** Wait a little after showtime, so a reading in flight as it began still counts. */
+const SETTLE_GRACE_MS = 30 * 60_000;
 
 /**
- * Wait a little after showtime before settling, so a poll that was in flight as
- * the screening began still counts.
+ * How long a settled screening stays in the working set before it is folded
+ * into history. A few days is enough for the dashboard's recent-days view to
+ * read per-screening detail; beyond that the daily totals are all anyone wants.
  */
-const SETTLE_GRACE_MS = 30 * 60_000;
+const FOLD_AFTER_DAYS = 10;
+
+/** Hours of ramp detail kept. Older buckets stop being interesting. */
+const RAMP_RETENTION_HOURS = 24 * 21;
 
 export type SettleResult = {
   settled: number;
+  folded: number;
   byConfidence: Record<string, number>;
 };
 
-export async function settleScreenings(opts: {
-  deadline: number;
-  batchSize?: number;
-}): Promise<SettleResult> {
-  const d = db();
-  const result: SettleResult = { settled: 0, byConfidence: {} };
-  const cutoff = new Date(Date.now() - SETTLE_GRACE_MS);
+export function settleScreenings(state: State, history: History): SettleResult {
+  const result: SettleResult = { settled: 0, folded: 0, byConfidence: {} };
+  const now = Date.now();
+  const cutoff = now - SETTLE_GRACE_MS;
 
-  const pending = await d
-    .select({
-      id: schema.screenings.id,
-      startsAt: schema.screenings.startsAt,
-      capacity: schema.screenings.capacity,
-    })
-    .from(schema.screenings)
-    .leftJoin(
-      schema.screeningsSettled,
-      eq(schema.screeningsSettled.screeningId, schema.screenings.id),
-    )
-    .where(
-      and(lt(schema.screenings.startsAt, cutoff), isNull(schema.screeningsSettled.screeningId)),
-    )
-    .orderBy(desc(schema.screenings.startsAt))
-    .limit(opts.batchSize ?? 2000);
+  for (const screening of Object.values(state.screenings)) {
+    if (screening.settled) continue;
+    const startsAt = new Date(screening.startsAt);
+    if (startsAt.getTime() >= cutoff) continue;
 
-  for (const row of pending) {
-    if (Date.now() >= opts.deadline) break;
+    const capturedAt = screening.at ? new Date(screening.at) : null;
+    const confidence = settleConfidence(startsAt, capturedAt);
 
-    const [latest] = await d
-      .select({
-        seatsSold: schema.screeningSnapshots.seatsSold,
-        seatsTotal: schema.screeningSnapshots.seatsTotal,
-        capturedAt: schema.screeningSnapshots.capturedAt,
-      })
-      .from(schema.screeningSnapshots)
-      .where(eq(schema.screeningSnapshots.screeningId, row.id))
-      .orderBy(desc(schema.screeningSnapshots.capturedAt))
-      .limit(1);
-
-    const confidence = settleConfidence(row.startsAt, latest?.capturedAt ?? null);
-
-    await d
-      .insert(schema.screeningsSettled)
-      .values({
-        screeningId: row.id,
-        seatsSold: latest?.seatsSold ?? 0,
-        seatsTotal: latest?.seatsTotal ?? row.capacity ?? 0,
-        confidence,
-        capturedAt: latest?.capturedAt ?? null,
-      })
-      .onConflictDoNothing({ target: schema.screeningsSettled.screeningId });
-
-    // A settled screening never needs polling again.
-    await d
-      .update(schema.screenings)
-      .set({ nextPollAt: null })
-      .where(eq(schema.screenings.id, row.id));
+    screening.settled = {
+      sold: screening.sold ?? 0,
+      total: screening.total ?? 0,
+      confidence,
+      capturedAt: screening.at,
+    };
+    screening.nextPollAt = null;
 
     result.settled += 1;
     result.byConfidence[confidence] = (result.byConfidence[confidence] ?? 0) + 1;
   }
 
+  result.folded = foldIntoHistory(state, history, now);
+  pruneRamp(state, now);
   return result;
 }
 
-/**
- * How long the minute-by-minute history is kept.
- *
- * Once a screening is settled its final admissions figure lives in
- * `screenings_settled` forever; the raw snapshots behind it only matter for
- * ramp curves, which nobody looks at a month after the fact. Dropping them
- * keeps the database inside a free tier instead of growing without bound.
- */
-const SNAPSHOT_RETENTION_DAYS = 45;
+function foldIntoHistory(state: State, history: History, now: number): number {
+  const foldBefore = now - FOLD_AFTER_DAYS * 24 * 60 * 60 * 1000;
+  let folded = 0;
 
-export async function pruneSnapshots(opts: { retentionDays?: number } = {}): Promise<number> {
-  const days = opts.retentionDays ?? SNAPSHOT_RETENTION_DAYS;
-  const result = await db().execute(sql`
-    delete from screening_snapshots sn
-    using screenings s
-    where s.id = sn.screening_id
-      and s.starts_at < now() - make_interval(days => ${days})
-      -- Never drop history for a screening whose final figure was never
-      -- written; that row still needs settling.
-      and exists (select 1 from screenings_settled st where st.screening_id = s.id)
-  `);
-  return result.rowCount ?? 0;
+  for (const [k, s] of Object.entries(state.screenings)) {
+    if (!s.settled) continue;
+    if (new Date(s.startsAt).getTime() >= foldBefore) continue;
+
+    const day: HistoryDay = (history.days[s.day] ??= {
+      films: {},
+      coverage: { total: 0, final: 0, partial: 0, missed: 0 },
+    });
+
+    const id = String(s.filmId);
+    const totals = (day.films[id] ??= { sold: 0, capacity: 0, screenings: 0, gross: 0 });
+    totals.sold += s.settled.sold;
+    totals.capacity += s.settled.total;
+    totals.screenings += 1;
+    totals.gross += s.settled.sold * (s.priceMin ?? CC_ESTIMATED_TICKET_PRICE_CZK);
+
+    day.coverage.total += 1;
+    day.coverage[s.settled.confidence] += 1;
+
+    const film = state.films.find((f) => f.id === s.filmId);
+    if (film) history.films[id] = { title: film.title, originalTitle: film.originalTitle };
+
+    delete state.screenings[k];
+    folded += 1;
+  }
+
+  return folded;
+}
+
+function pruneRamp(state: State, now: number): void {
+  const cutoff = new Date(now - RAMP_RETENTION_HOURS * 60 * 60 * 1000).toISOString().slice(0, 13);
+  state.ramp = state.ramp.filter((b) => b.at >= cutoff);
 }
 
 /**
- * Share of recently settled screenings we failed to capture.
+ * Share of recently settled screenings we failed to capture in time.
  *
- * Surfaced in the UI so a reader can tell the difference between "this film
- * sold little" and "we did not manage to measure it".
+ * Surfaced in the UI so a reader can tell "this film sold little" apart from
+ * "we did not manage to measure it".
  */
-export async function recentCoverage(days = 7): Promise<{
-  total: number;
-  missed: number;
-  partial: number;
-}> {
-  const d = db();
-  const [row] = await d
-    .select({
-      total: sql<number>`count(*)::int`,
-      missed: sql<number>`count(*) filter (where ${schema.screeningsSettled.confidence} = 'missed')::int`,
-      partial: sql<number>`count(*) filter (where ${schema.screeningsSettled.confidence} = 'partial')::int`,
-    })
-    .from(schema.screeningsSettled)
-    .innerJoin(schema.screenings, eq(schema.screenings.id, schema.screeningsSettled.screeningId))
-    .where(sql`${schema.screenings.startsAt} > now() - make_interval(days => ${days})`);
+export function recentCoverage(
+  state: State,
+  history: History,
+  days = 7,
+): { total: number; missed: number; partial: number } {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  let total = 0;
+  let missed = 0;
+  let partial = 0;
 
-  return row ?? { total: 0, missed: 0, partial: 0 };
+  for (const s of Object.values(state.screenings)) {
+    if (!s.settled || s.startsAt < since) continue;
+    total += 1;
+    if (s.settled.confidence === "missed") missed += 1;
+    if (s.settled.confidence === "partial") partial += 1;
+  }
+
+  const sinceDay = since.slice(0, 10);
+  for (const [day, d] of Object.entries(history.days)) {
+    if (day < sinceDay) continue;
+    total += d.coverage.total;
+    missed += d.coverage.missed;
+    partial += d.coverage.partial;
+  }
+
+  return { total, missed, partial };
 }

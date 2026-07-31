@@ -1,0 +1,10 @@
+{
+  "/_global-error/page": "/_global-error",
+  "/_not-found/page": "/_not-found",
+  "/api/cron/cinemacity/route": "/api/cron/cinemacity",
+  "/api/cron/cinestar-halls/route": "/api/cron/cinestar-halls",
+  "/api/cron/cinestar-schedule/route": "/api/cron/cinestar-schedule",
+  "/api/cron/settle/route": "/api/cron/settle",
+  "/film/[id]/page": "/film/[id]",
+  "/page": "/"
+}
