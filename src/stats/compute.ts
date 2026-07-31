@@ -8,7 +8,7 @@
 import { CC_ESTIMATED_TICKET_PRICE_CZK } from "@/ingest/cinemacity";
 import { recentCoverage } from "@/ingest/settle";
 import { pragueDate } from "@/lib/time";
-import type { History, Screening, State } from "@/store/types";
+import type { Article, History, Rating, Screening, State } from "@/store/types";
 
 /**
  * Share of box office reaching the production side. Real Czech distribution
@@ -42,6 +42,8 @@ export type LiveFilm = {
   topCinemas: { name: string; admissions: number; seatsOffered: number }[];
   /** Hourly measured sales, `YYYY-MM-DDTHH` → tickets. */
   ramp: Record<string, number>;
+  rating?: Rating;
+  articles?: Article[];
 };
 
 export type LiveDay = {
@@ -102,9 +104,19 @@ export function computeLive(state: State, history: History): Live {
   const days = new Map<string, LiveDay>();
   const cinemaTotals = new Map<number, Map<string, { admissions: number; seatsOffered: number }>>();
 
-  const filmMeta = (id: number) => {
+  const filmMeta = (
+    id: number,
+  ): { title: string; originalTitle: string | null; rating?: Rating; articles?: Article[] } => {
     const known = state.films.find((f) => f.id === id);
-    if (known) return { title: known.title, originalTitle: known.originalTitle };
+    if (known) {
+      return {
+        title: known.title,
+        originalTitle: known.originalTitle,
+        rating: known.rating,
+        articles: known.articles,
+      };
+    }
+    // A film folded into history keeps its name but loses its live context.
     const fromHistory = history.films[String(id)];
     return fromHistory ?? { title: `#${id}`, originalTitle: null };
   };
@@ -132,6 +144,8 @@ export function computeLive(state: State, history: History): Live {
         formats: {},
         topCinemas: [],
         ramp: {},
+        rating: meta.rating,
+        articles: meta.articles,
       };
       films.set(id, f);
     }

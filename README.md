@@ -16,6 +16,8 @@ GitHub Pages. Na telefonu se dá dát „Přidat na plochu" a chová se jako app
 - **Křivka nabíhání prodeje** ve stylu Social Blade
 - **Naplnění sálů**, nejplnější projekce, srovnání sítí, kin a formátů
 - **Odhad tržeb** a podílu pro filmaře
+- **Recenze a články** ke každému filmu z českých médií
+- **Hodnocení v procentech** (volitelně, přes TMDB)
 
 ## Rozjetí
 
@@ -65,10 +67,21 @@ dashboard to říká nahlas.
 ## Jak to funguje
 
 Jeden příkaz (`npm run ingest`) udělá celý cyklus: načte JSON stav, dotáhne obě
-sítě, uloží stav zpátky a přegeneruje data pro stránku. GitHub Actions ho pouští
-každých 5 minut a výsledek force-pushne na větev `gh-pages`, odkud ho Pages
-servírují. Ta větev je zároveň úložiště — každý běh z ní stav načte a zase ho
-tam uloží.
+sítě, uloží stav zpátky a přegeneruje data pro stránku. Po každé iteraci se
+výsledek force-pushne na větev `gh-pages`, odkud ho Pages servírují. Ta větev je
+zároveň úložiště — každý běh z ní stav načte a zase ho tam uloží.
+
+### Proč trigger jednou za hodinu, a ne za 5 minut
+
+Protože `*/5` v cronu **nefunguje**. Naměřeno na tomhle repu: za tři hodiny
+GitHub odpálil dva plánované běhy místo šestatřiceti — krátké intervaly řadí do
+fronty a při zátěži zahazuje. A protože obsazenost projekce je po jejím začátku
+nenávratně nečitelná, vynechaný odečet znamená trvale ztracené číslo.
+
+Kadence proto nesmí viset na plánovači. Hodinový trigger GitHub spouští
+spolehlivě, a job si pak 50 minut drží runnera a iteruje sám každých 5 minut
+(`npm run ingest -- loop`). Po každé iteraci publikuje, takže dashboard se hýbe
+po pěti minutách, ne po hodině.
 
 ### Tři věci, které tvarují celý návrh
 
@@ -102,6 +115,29 @@ Uzavřené projekce se po 10 dnech složí do denních součtů a ze `state.json
 smažou. Pracovní sada tak zůstává úměrná tomu, co je zrovna v prodeji, místo
 aby rostla donekonečna. Naměřeno: `state.json` ~1 MB, `live.json` ~27 kB.
 
+## Recenze, články a hodnocení
+
+Ke každému filmu se dotahují české články a recenze přes **RSS Google News** —
+zdarma, bez klíče, bez registrace. Recenze se poznají podle titulku a řadí se
+nahoru.
+
+**Hodnocení je volitelné** a bere se z **TMDB**. Chce to bezplatný klíč
+(themoviedb.org → Settings → API) uložený jako secret `TMDB_API_KEY`. Bez něj
+se hodnocení prostě nezobrazí, nic dalšího se nerozbije.
+
+### Proč ne ČSFD
+
+ČSFD by bylo přirozenější — je to hodnocení, které se v Česku cituje. Nemá ale
+veřejné API a na všechno, co není prohlížeč, posílá proof-of-work výzvu
+(„Making sure you're not a bot"). Kinobox je za Cloudflare a vrací 403.
+Obcházet tyhle bariéry by znamenalo prolomit ochranu, kterou tam provozovatel
+dal schválně — tohle to nedělá. Recenze z ČSFD se ale stejně objeví
+v Google News jako odkaz, což je způsob, jak je vydavatelé číst chtějí.
+
+Kontext se obnovuje jednou za 6 hodin a jen u filmů s aspoň 50 diváky. Článek
+publikovaný ráno tam bude i večer — na rozdíl od obsazenosti, kterou nelze
+dohnat.
+
 ## Proč to nejde jako soubor přímo v telefonu
 
 Obě API blokují prohlížeč přes CORS:
@@ -117,7 +153,7 @@ sbírá se historie i když je telefon vypnutý, což lokální soubor nikdy neu
 ## Testy
 
 ```bash
-npm test        # 68 testů, fixtures ze skutečných odpovědí obou API
+npm test        # 79 testů, fixtures ze skutečných odpovědí obou API
 npm run typecheck
 ```
 
@@ -152,6 +188,9 @@ logiku rampy a časovou zónu včetně přechodů na letní čas.
 - Historie se nedá získat zpětně — křivky a trendy dávají smysl až po několika
   dnech sběru.
 - Pokud by repo bylo 60 dní bez aktivity, GitHub plánovaná workflow vypne.
+- Sběr běží ~50 minut z každé hodiny, takže mezi 50. a 60. minutou je krátká
+  mezera. Na veřejném repu jsou minuty zdarma neomezené, ale runner je po tu
+  dobu obsazený.
 
 ## Předchozí verze
 

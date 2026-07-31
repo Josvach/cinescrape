@@ -159,6 +159,28 @@
         margin-bottom: 10px; background: none; border: 0; padding: 0; cursor: pointer; font-family: inherit;
       }
       .empty { color: var(--text-muted); font-size: 13px; padding: 18px 0; text-align: center; }
+
+      /* Rating sits beside the title as a chip, not as a competing headline. */
+      .rating {
+        display: inline-flex; align-items: baseline; gap: 5px;
+        background: var(--surface-2); border-radius: 999px; padding: 3px 10px;
+        font-size: 12px; color: var(--text-secondary); margin-left: 8px;
+        vertical-align: middle; white-space: nowrap;
+      }
+      .rating b { font-size: 13px; font-weight: 640; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+
+      .article {
+        display: block; padding: 11px 0; border-top: 1px solid var(--border);
+        color: inherit; text-decoration: none;
+      }
+      .article:first-of-type { border-top: none; }
+      .article .head { display: block; font-size: 13.5px; line-height: 1.35; overflow-wrap: anywhere; }
+      .article .meta { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 3px; }
+      .article .tag {
+        display: inline-block; font-size: 10px; text-transform: uppercase;
+        letter-spacing: 0.04em; color: var(--series-2); border: 1px solid currentColor;
+        border-radius: 4px; padding: 0 4px; margin-right: 6px; vertical-align: 1px;
+      }
       h3.sub { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); font-weight: 600; margin: 16px 0 4px; }
       svg { display: block; overflow: visible; }
     </style>
@@ -540,7 +562,11 @@
 
         return el("div", {},
           backButton(),
-          el("header", { class: "masthead" }, el("h1", {}, f.title)),
+          el("header", { class: "masthead" },
+            el("h1", {}, f.title,
+              f.rating &&
+                el("span", { class: "rating", title: `${num(f.rating.votes)} hlasů na TMDB` },
+                  el("b", {}, `${f.rating.percent} %`), "hodnocení"))),
           f.originalTitle && f.originalTitle !== f.title &&
             el("p", { style: "margin:-14px 0 16px;font-size:12.5px;color:var(--text-muted)" }, f.originalTitle),
 
@@ -577,7 +603,35 @@
             el("p", { class: "caption" }, "Návštěvnost a naplnění podle sítě, formátu a kina."),
             breakdown("Podle sítě", toRows(f.chains)),
             breakdown("Podle formátu", toRows(f.formats)),
-            breakdown("Nejsilnější kina", f.topCinemas.map((c) => ({ label: c.name, ...c })))));
+            breakdown("Nejsilnější kina", f.topCinemas.map((c) => ({ label: c.name, ...c })))),
+
+          articlesSection(f));
+      }
+
+      function articlesSection(f) {
+        if (!f.articles?.length) return null;
+        const reviews = f.articles.filter((a) => a.isReview);
+        const rest = f.articles.filter((a) => !a.isReview);
+        return el("section", { class: "card" },
+          el("h2", {}, "Recenze a články"),
+          el("p", { class: "caption" },
+            "Z Google News, řazeno od nejnovějšího. Odkazy vedou na weby vydavatelů."),
+          [...reviews, ...rest].map((a) =>
+            el("a", { class: "article", href: a.url, target: "_blank", rel: "noopener noreferrer" },
+              el("span", { class: "head" },
+                a.isReview && el("span", { class: "tag" }, "recenze"),
+                a.title),
+              el("span", { class: "meta" },
+                [a.source, relativeDay(a.publishedAt)].filter(Boolean).join(" · ")))));
+      }
+
+      /** "dnes" / "včera" / "před 4 dny" — a date alone reads as noise here. */
+      function relativeDay(iso) {
+        const days = Math.floor((Date.now() - new Date(iso)) / 86400000);
+        if (days <= 0) return "dnes";
+        if (days === 1) return "včera";
+        if (days < 7) return `před ${days} dny`;
+        return new Date(iso).toLocaleDateString(CZ, { day: "numeric", month: "numeric" });
       }
 
       const toRows = (obj) =>

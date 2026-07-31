@@ -3,28 +3,22 @@ name: ingest
 # The whole product runs from here: this workflow scrapes both chains and
 # publishes the dashboard. There is no server and no database.
 #
-# Scheduling lives in GitHub rather than on a host because GitHub-hosted
-# runners are unmetered for public repositories, which is what makes a
-# five-minute cadence free.
+# The trigger is hourly, but the job iterates every five minutes internally.
 #
-# Two things worth knowing:
-#   * GitHub queues scheduled runs and drops them under load, so ticks are
-#     "roughly every five minutes", not exact. The poller copes — it works a
-#     due-queue, so a skipped tick just means more to do on the next one.
-#   * Scheduled workflows are disabled after 60 days with no repository
-#     activity. Push something, or re-enable them in the Actions tab.
+# That split is deliberate. A "*/5" cron does not actually run every five
+# minutes: GitHub queues short-interval schedules and drops them under load, and
+# on this repository it produced two runs in three hours instead of thirty-six.
+# Since a screening's occupancy becomes unreadable the moment it starts, missing
+# the last reading loses that number permanently — so the cadence cannot depend
+# on the scheduler. An hourly trigger is fired reliably, and the job holds the
+# runner and does the pacing itself.
+#
+# Scheduled workflows are disabled after 60 days with no repository activity.
+# Push something, or re-enable them in the Actions tab.
 on:
   schedule:
-    - cron: "*/5 * * * *"
-    # Refreshing the CineStar programme costs 12 page fetches plus one
-    # event lookup per newly listed screening, so it runs on its own slower beat.
-    - cron: "7 */6 * * *"
+    - cron: "13 * * * *"
   workflow_dispatch:
-    inputs:
-      discover:
-        description: Also refresh the CineStar schedule
-        type: boolean
-        default: true
 
 concurrency:
   # Two runs writing the same published state would lose one of them.
@@ -37,11 +31,16 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    # Stops short of the next hourly trigger so two jobs never write the same
+    # published state.
+    timeout-minutes: 56
     env:
       CINESTAR_API_KEY: ${{ secrets.CINESTAR_API_KEY }}
+      TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
       SCRAPER_CONTACT: ${{ vars.SCRAPER_CONTACT }}
       JOB_BUDGET_MS: "180000"
+      LOOP_MINUTES: "50"
+      LOOP_INTERVAL_SECONDS: "300"
     steps:
       - uses: actions/checkout@v5
 
@@ -64,28 +63,11 @@ jobs:
             echo "no published branch yet — first run, starting empty"
           fi
 
-      - name: Ingest
-        run: |
-          if [ "${{ github.event.schedule }}" = "7 */6 * * *" ] || [ "${{ inputs.discover }}" = "true" ]; then
-            npm run ingest -- discover
-          else
-            npm run ingest
-          fi
-
-      - name: Publish
-        run: |
-          rm -rf _site && mkdir _site
-          cp -r site/. _site/
-          cp -r data _site/data
-          # Prevent Pages' Jekyll step from swallowing anything.
-          touch _site/.nojekyll
-
-          cd _site
-          git init -q -b gh-pages
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -q -m "data $(date -u +%FT%TZ)"
-          # A fresh single-commit branch every time, so the repository does not
-          # grow by a megabyte of state every five minutes.
-          git push -q --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
+      - name: Scrape and publish every five minutes for the rest of the hour
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # Each iteration publishes, so the dashboard moves on its own cadence
+          # rather than once when the job finally exits.
+          PUBLISH_CMD: bash scripts/publish.sh
+        run: npm run ingest -- loop

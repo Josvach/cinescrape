@@ -35,12 +35,32 @@ export type Hall = {
   seatplanId: string | null;
 };
 
+export type Article = {
+  title: string;
+  url: string;
+  source: string;
+  publishedAt: string;
+  isReview: boolean;
+};
+
+export type Rating = {
+  /** 0–100. */
+  percent: number;
+  votes: number;
+  tmdbId: number;
+};
+
 export type Film = {
   id: number;
   matchKey: string;
   tightKey: string;
   title: string;
   originalTitle: string | null;
+  /** Press coverage and reviews; refreshed on a much slower beat than occupancy. */
+  articles?: Article[];
+  rating?: Rating;
+  /** ISO instant of the last context refresh. */
+  contextAt?: string;
 };
 
 export type SettleConfidence = "final" | "partial" | "missed";
