@@ -27,7 +27,7 @@ import {
 } from "@/sources/cinestar";
 
 import { recordSnapshot, resolveFilm, upsertCinema, upsertHall, upsertScreening } from "./repo";
-import { nextPollAt } from "./schedule";
+import { nextPollAt, shouldRecordSnapshot } from "./schedule";
 
 /** Minimum gap between requests to api.cinestar.cz. */
 const REQUEST_INTERVAL_MS = 350;
@@ -200,6 +200,8 @@ export async function pollCineStarHalls(opts: {
       id: schema.screenings.id,
       externalId: schema.screenings.externalId,
       startsAt: schema.screenings.startsAt,
+      currentSeatsSold: schema.screenings.currentSeatsSold,
+      currentAt: schema.screenings.currentAt,
     })
     .from(schema.screenings)
     .where(
@@ -224,6 +226,12 @@ export async function pollCineStarHalls(opts: {
           screeningId: row.id,
           seatsSold: occ.seatsSold,
           seatsTotal: occ.seatsTotal,
+          recordHistory: shouldRecordSnapshot({
+            previousSeatsSold: row.currentSeatsSold,
+            seatsSold: occ.seatsSold,
+            lastCapturedAt: row.currentAt,
+            startsAt: row.startsAt,
+          }),
           priceMin: occ.priceMin,
           priceMax: occ.priceMax,
           priceSource: occ.priceMin != null ? "chain" : null,

@@ -90,6 +90,30 @@ export async function settleScreenings(opts: {
 }
 
 /**
+ * How long the minute-by-minute history is kept.
+ *
+ * Once a screening is settled its final admissions figure lives in
+ * `screenings_settled` forever; the raw snapshots behind it only matter for
+ * ramp curves, which nobody looks at a month after the fact. Dropping them
+ * keeps the database inside a free tier instead of growing without bound.
+ */
+const SNAPSHOT_RETENTION_DAYS = 45;
+
+export async function pruneSnapshots(opts: { retentionDays?: number } = {}): Promise<number> {
+  const days = opts.retentionDays ?? SNAPSHOT_RETENTION_DAYS;
+  const result = await db().execute(sql`
+    delete from screening_snapshots sn
+    using screenings s
+    where s.id = sn.screening_id
+      and s.starts_at < now() - make_interval(days => ${days})
+      -- Never drop history for a screening whose final figure was never
+      -- written; that row still needs settling.
+      and exists (select 1 from screenings_settled st where st.screening_id = s.id)
+  `);
+  return result.rowCount ?? 0;
+}
+
+/**
  * Share of recently settled screenings we failed to capture.
  *
  * Surfaced in the UI so a reader can tell the difference between "this film

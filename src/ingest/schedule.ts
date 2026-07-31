@@ -48,6 +48,46 @@ export function nextPollAt(startsAt: Date, now: Date = new Date()): Date | null 
   return new Date(candidate);
 }
 
+/**
+ * Whether a reading is worth appending to the history.
+ *
+ * Cinema City hands us all ~3400 screenings on every run, but only a few dozen
+ * of them have actually moved — measured live, 99 changed over ten minutes.
+ * Storing the other 3300 unchanged rows every five minutes would add nothing to
+ * the ramp curve (it is a step function) while writing roughly 29 million rows
+ * a month, which no free-tier database survives.
+ *
+ * So history is append-on-change, throttled by how far away the screening is,
+ * and always written inside the final capture window. The live figure on the
+ * screening row is updated on every poll regardless — that part is not history.
+ */
+export function shouldRecordSnapshot(args: {
+  previousSeatsSold: number | null;
+  seatsSold: number;
+  lastCapturedAt: Date | null;
+  startsAt: Date;
+  now?: Date;
+}): boolean {
+  const now = args.now ?? new Date();
+
+  // First ever reading of this screening: it is the baseline the curve starts from.
+  if (args.previousSeatsSold === null || args.lastCapturedAt === null) return true;
+
+  const untilStart = args.startsAt.getTime() - now.getTime();
+
+  // The reading that decides the final admissions figure is never throttled.
+  if (untilStart <= FINAL_CAPTURE_WINDOW_MS) return true;
+
+  if (args.seatsSold === args.previousSeatsSold) return false;
+
+  // Resolution that matters near showtime is wasted a month out, where a film
+  // trickling a few presales an hour does not need minute-by-minute history.
+  const minGapMs =
+    untilStart <= 6 * HOUR ? 0 : untilStart <= 48 * HOUR ? 15 * MINUTE : 60 * MINUTE;
+
+  return now.getTime() - args.lastCapturedAt.getTime() >= minGapMs;
+}
+
 /** How much we trust a settled figure, given when its snapshot was captured. */
 export function settleConfidence(
   startsAt: Date,

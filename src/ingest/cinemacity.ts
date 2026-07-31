@@ -17,6 +17,7 @@ import {
 } from "@/sources/cinemacity";
 
 import { recordSnapshot, resolveFilm, setHallCapacity, upsertCinema, upsertHall, upsertScreening } from "./repo";
+import { shouldRecordSnapshot } from "./schedule";
 
 /**
  * Cinema City publishes no prices in the feed, so revenue for this chain is an
@@ -26,7 +27,12 @@ export const CC_ESTIMATED_TICKET_PRICE_CZK = 205;
 
 export type CcIngestResult = {
   presentations: number;
+  /** Readings appended to the history. */
   snapshots: number;
+  /** Readings that moved the live figure but were too minor to keep. */
+  liveOnlyUpdates: number;
+  /** Screenings that had not moved at all — no write of any kind. */
+  unchanged: number;
   capacityFetches: number;
   staleCapacities: number;
   errors: string[];
@@ -37,6 +43,8 @@ export async function ingestCinemaCity(opts: { deadline: number }): Promise<CcIn
   const result: CcIngestResult = {
     presentations: 0,
     snapshots: 0,
+    liveOnlyUpdates: 0,
+    unchanged: 0,
     capacityFetches: 0,
     staleCapacities: 0,
     errors: [],
@@ -105,7 +113,7 @@ export async function ingestCinemaCity(opts: { deadline: number }): Promise<CcIn
         });
       }
 
-      const screeningId = await upsertScreening(d, {
+      const screening = await upsertScreening(d, {
         chain: n.chain,
         externalId: n.externalId,
         filmId,
@@ -132,12 +140,28 @@ export async function ingestCinemaCity(opts: { deadline: number }): Promise<CcIn
           });
           continue;
         }
+        const recordHistory = shouldRecordSnapshot({
+          previousSeatsSold: screening.currentSeatsSold,
+          seatsSold,
+          lastCapturedAt: screening.currentAt,
+          startsAt: n.startsAt,
+        });
+
+        // Nothing moved and nothing is due: skip the write entirely. This is
+        // the common case for most of the feed on any given run.
+        if (!recordHistory && seatsSold === screening.currentSeatsSold) {
+          result.unchanged += 1;
+          continue;
+        }
+
         await recordSnapshot(d, {
-          screeningId,
+          screeningId: screening.id,
           seatsSold,
           seatsTotal: hall.capacity,
+          recordHistory,
         });
-        result.snapshots += 1;
+        if (recordHistory) result.snapshots += 1;
+        else result.liveOnlyUpdates += 1;
       }
     } catch (err) {
       result.errors.push(`presentation ${p.id}: ${String(err)}`);

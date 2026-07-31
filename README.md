@@ -36,14 +36,20 @@ dashboard to říká nahlas.
 
 ## Jak to běží
 
-Čtyři cron joby na Vercelu, každý s vlastním časovým rozpočtem:
+Čtyři joby, každý s vlastním časovým rozpočtem:
 
 | Job | Frekvence | Co dělá |
 |---|---|---|
-| `/api/cron/cinemacity` | 5 min | jeden fetch → snapshot všech projekcí |
-| `/api/cron/cinestar-halls` | 5 min | prioritní fronta `hall/get` |
-| `/api/cron/cinestar-schedule` | 6 h | nové projekce z programových stránek |
-| `/api/cron/settle` | 15 min | uzavření odehraných projekcí |
+| `cinemacity` | 5 min | jeden fetch → odečet všech projekcí |
+| `cinestar-halls` | 5 min | prioritní fronta `hall/get` |
+| `cinestar-schedule` | 6 h | nové projekce z programových stránek |
+| `settle` | 5–15 min | uzavření odehraných projekcí + úklid historie |
+
+Jdou spustit dvěma způsoby, které dělají přesně totéž:
+
+- **CLI** — `npm run job cinemacity`. Tudy je běží GitHub Actions.
+- **HTTP** — `/api/cron/<job>`, chráněné `CRON_SECRET`. Pro Vercel Cron nebo
+  jakýkoli externí scheduler.
 
 ### Dvě věci, které tvarují celý návrh
 
@@ -58,7 +64,45 @@ a `missed` se v UI nezamlčuje, jinak by nešlo odlišit „film se neprodával"
 
 **Náklady jsou asymetrické.** Cinema City = 1 request na celou síť. CineStar =
 1 request na projekci. Poller proto nikdy nezkouší frontu vyprázdnit; běží
-dokud mu nedojde rozpočet (~50 s) a zbytek dobere příští tik.
+dokud mu nedojde rozpočet a zbytek dobere příští tik.
+
+**Do historie se zapisuje jen změna.** Cinema City vrací všech ~3 400 projekcí
+při každém běhu, ale mění se jich pár desítek. Naměřeno: 3 401 → **26 zapsaných
+řádků** za běh v ustáleném stavu. Bez toho by databáze rostla o ~29 M řádků
+měsíčně a žádný free tier by nepřežil týden. Živé číslo na projekci se přitom
+aktualizuje vždy — škrtá se jen duplicitní historie. Odečet v okně před
+začátkem projekce se neškrtí nikdy, protože právě ten se stává finálním číslem.
+
+## Hosting zdarma
+
+Vercel Hobby umí cron **jen jednou denně**, což pro data, která je nutné
+zachytit před začátkem projekce, nestačí. Plánování proto neběží na Vercelu:
+
+| Vrstva | Zdarma | Proč zrovna tohle |
+|---|---|---|
+| **Scheduler** | GitHub Actions | Pro veřejné repo neomezeně minut. Joby jsou skripty, ne HTTP requesty, takže je netrápí žádný serverless timeout. |
+| **Databáze** | Supabase (500 MB) | Nemá strop na compute-hodiny. Neon free má 100 CU-hodin/měsíc, což při odečtu každých 5 minut nevydrží ani polovinu měsíce — compute se nikdy neuspí. |
+| **Web** | Vercel Hobby / Cloudflare Pages | Dashboard jen čte z DB. |
+
+Nastavení: v repu `Settings → Secrets and variables → Actions` přidej
+`DATABASE_URL` a `CINESTAR_API_KEY`, volitelně proměnnou `SCRAPER_CONTACT`.
+Workflow `.github/workflows/ingest.yml` se pak rozjede sám.
+
+Na co si dát pozor:
+
+- **Repo musí být veřejné**, aby byly Actions minuty zdarma neomezené.
+  V privátním repu je 2 000 minut/měsíc, což na pětiminutový takt nestačí —
+  tam vyjde tak dvacetiminutový interval.
+- **GitHub plánované workflow odkládá** a při zátěži zahazuje. Takt je „zhruba
+  každých 5 minut", ne přesně. Poller s tím počítá — pracuje frontu podle
+  `next_poll_at`, takže vynechaný tik znamená jen víc práce v tom dalším.
+- **Po 60 dnech bez aktivity v repu se plánovaná workflow vypnou.** Přijde
+  e-mail; když ho přehlédneš, sběr tiše ustane.
+- **Vercel Hobby je jen pro nekomerční použití.** Jakmile z toho bude placený
+  produkt pro producenty, je to porušení jejich podmínek — buď Pro za $20/měsíc,
+  nebo web na Cloudflare Pages, kde komerční použití na free tieru vadí.
+- Supabase free uspí projekt po týdnu nečinnosti; při běžícím sběru k tomu
+  nedojde.
 
 ## Rozjetí
 

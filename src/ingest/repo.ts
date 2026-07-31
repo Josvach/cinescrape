@@ -160,7 +160,13 @@ export type ScreeningUpsert = {
   nextPollAt?: Date | null;
 };
 
-export async function upsertScreening(d: Db, input: ScreeningUpsert): Promise<number> {
+export type ScreeningState = {
+  id: number;
+  currentSeatsSold: number | null;
+  currentAt: Date | null;
+};
+
+export async function upsertScreening(d: Db, input: ScreeningUpsert): Promise<ScreeningState> {
   const [row] = await d
     .insert(schema.screenings)
     .values({
@@ -182,16 +188,22 @@ export async function upsertScreening(d: Db, input: ScreeningUpsert): Promise<nu
         lastSeenAt: new Date(),
       },
     })
-    .returning({ id: schema.screenings.id });
-  return row.id;
+    .returning({
+      id: schema.screenings.id,
+      currentSeatsSold: schema.screenings.currentSeatsSold,
+      currentAt: schema.screenings.currentAt,
+    });
+  return row;
 }
 
 /**
- * Append a snapshot and mirror it onto the screening row.
+ * Record a reading.
  *
- * The snapshot table is the history the ramp charts read; the mirrored columns
- * are what every "how is this film doing right now" query hits, so neither one
- * is redundant.
+ * Two separate concerns share this call. The mirrored `current_*` columns are
+ * the live figure every dashboard query reads, and they are refreshed whenever
+ * the number moves. The snapshot table is the history behind the ramp charts,
+ * and it is only appended to when `recordHistory` says the reading is worth
+ * keeping — see `shouldRecordSnapshot`.
  */
 export async function recordSnapshot(
   d: Db,
@@ -200,6 +212,7 @@ export async function recordSnapshot(
     seatsSold: number;
     seatsTotal: number;
     capturedAt?: Date;
+    recordHistory?: boolean;
     priceMin?: number | null;
     priceMax?: number | null;
     priceSource?: string | null;
@@ -208,12 +221,14 @@ export async function recordSnapshot(
 ): Promise<void> {
   const capturedAt = input.capturedAt ?? new Date();
 
-  await d.insert(schema.screeningSnapshots).values({
-    screeningId: input.screeningId,
-    capturedAt,
-    seatsSold: input.seatsSold,
-    seatsTotal: input.seatsTotal,
-  });
+  if (input.recordHistory !== false) {
+    await d.insert(schema.screeningSnapshots).values({
+      screeningId: input.screeningId,
+      capturedAt,
+      seatsSold: input.seatsSold,
+      seatsTotal: input.seatsTotal,
+    });
+  }
 
   await d
     .update(schema.screenings)
