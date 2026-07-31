@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    { "path": "/api/cron/cinemacity", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/cinestar-halls", "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/cinestar-schedule", "schedule": "0 */6 * * *" },
+    { "path": "/api/cron/settle", "schedule": "*/15 * * * *" }
+  ],
+  "functions": {
+    "src/app/api/cron/**": {
+      "maxDuration": 120
+    }
+  }
+}
