@@ -98,6 +98,15 @@ export type State = {
   films: Film[];
   /** Per-chain external id → film id. */
   filmAliases: Record<Key, number>;
+  /**
+   * CineStar `TitleId` → our film id.
+   *
+   * The programme pages give every screening a TitleId but never a title, so
+   * one `event/get` is needed to name each one. Remembering the answer turns
+   * that into one lookup per film version rather than one per screening —
+   * roughly 80 requests instead of 2400.
+   */
+  cineStarTitles: Record<string, number>;
   screenings: Record<Key, Screening>;
   ramp: RampBucket[];
   nextFilmId: number;
@@ -126,6 +135,7 @@ export function emptyState(): State {
     halls: {},
     films: [],
     filmAliases: {},
+    cineStarTitles: {},
     screenings: {},
     ramp: [],
     nextFilmId: 1,

@@ -11,7 +11,8 @@
  */
 
 import { rateLimited } from "@/lib/http";
-import { businessDay, businessDayFromInstant } from "@/lib/time";
+import { businessDayFromInstant } from "@/lib/time";
+import { normalizeFormats } from "@/sources/formats";
 import {
   CINESTAR_CINEMAS,
   type CineStarCinema,
@@ -21,6 +22,8 @@ import {
   fetchProgramme,
   normalizeEvent,
   readOccupancy,
+  type ScheduledEvent,
+  versionFromProperties,
 } from "@/sources/cinestar";
 import { recordReading, resolveFilm, upsertCinema, upsertHall, upsertScreening } from "@/store/mutations";
 import { key, type State } from "@/store/types";
@@ -41,7 +44,16 @@ export type CsDiscoverResult = {
   eventsSeen: number;
   registered: number;
   rescheduled: number;
+  titlesLookedUp: number;
+  titlesUnresolved: number;
   errors: string[];
+};
+
+type Candidate = {
+  event: ScheduledEvent;
+  cinema: CineStarCinema;
+  /** `cinemaid` from the hall records on the same page. */
+  cinemaId: string;
 };
 
 export async function discoverCineStarSchedule(
@@ -53,22 +65,28 @@ export async function discoverCineStarSchedule(
     eventsSeen: 0,
     registered: 0,
     rescheduled: 0,
+    titlesLookedUp: 0,
+    titlesUnresolved: 0,
     errors: [],
   };
 
   const horizon = Date.now() + DISCOVERY_HORIZON_DAYS * 24 * 60 * 60 * 1000;
-  const candidates = new Map<string, { startsAt: Date; cinema: CineStarCinema }>();
+  const candidates = new Map<string, Candidate>();
 
   await rateLimited(
     CINESTAR_CINEMAS,
     async (cinema) => {
-      const events = await fetchProgramme(cinema.slug);
+      const programme = await fetchProgramme(cinema.slug);
       result.pagesFetched += 1;
-      for (const e of events) {
+      for (const event of programme.events) {
         result.eventsSeen += 1;
-        const t = e.startsAt.getTime();
+        const t = event.startsAt.getTime();
         if (t < Date.now() || t > horizon) continue;
-        candidates.set(e.eventId, { startsAt: e.startsAt, cinema });
+        const cinemaId = programme.hallCinemas[event.objectId];
+        // Without the hall→cinema mapping we cannot place the screening, and
+        // guessing would attribute it to the wrong multiplex.
+        if (!cinemaId) continue;
+        candidates.set(event.eventId, { event, cinema, cinemaId });
       }
     },
     {
@@ -78,88 +96,117 @@ export async function discoverCineStarSchedule(
     },
   );
 
-  const unregistered: string[] = [];
+  const unregistered: Candidate[] = [];
   for (const [eventId, c] of candidates) {
     const existing = state.screenings[key("cinestar", eventId)];
     if (!existing) {
-      unregistered.push(eventId);
+      unregistered.push(c);
       continue;
     }
     // The programme payload is authoritative about showtimes and we already
     // have it, so a rescheduled screening is corrected for free.
-    if (new Date(existing.startsAt).getTime() !== c.startsAt.getTime()) {
-      existing.startsAt = c.startsAt.toISOString();
-      existing.day = businessDayFromInstant(c.startsAt);
-      existing.nextPollAt = nextPollAt(c.startsAt, new Date())?.toISOString() ?? null;
+    if (new Date(existing.startsAt).getTime() !== c.event.startsAt.getTime()) {
+      existing.startsAt = c.event.startsAt.toISOString();
+      existing.day = businessDayFromInstant(c.event.startsAt);
+      existing.nextPollAt = nextPollAt(c.event.startsAt, new Date())?.toISOString() ?? null;
       result.rescheduled += 1;
     }
   }
 
-  // Nearest showtime first: a run that hits its deadline resumes here rather
-  // than starting over, so the most urgent screenings are always registered.
-  unregistered.sort(
-    (a, b) => candidates.get(a)!.startsAt.getTime() - candidates.get(b)!.startsAt.getTime(),
-  );
+  // Nearest showtime first, so a run that runs out of budget has still named
+  // the films playing tonight.
+  unregistered.sort((a, b) => a.event.startsAt.getTime() - b.event.startsAt.getTime());
+
+  // The programme pages carry everything except the film's name, so the only
+  // per-request work left is naming each unknown TitleId — once, not once per
+  // screening. Across all twelve cinemas that is dozens of lookups rather than
+  // thousands, which is what lets a single run register the whole schedule.
+  const unknownTitles: string[] = [];
+  for (const c of unregistered) {
+    const id = c.event.titleId;
+    if (id && state.cineStarTitles[id] === undefined && !unknownTitles.includes(id)) {
+      unknownTitles.push(id);
+    }
+  }
 
   await rateLimited(
-    unregistered,
-    async (eventId) => {
-      const event = await fetchEvent(eventId);
-      registerScreening(state, event, candidates.get(eventId)!.cinema);
-      result.registered += 1;
+    unknownTitles,
+    async (titleId) => {
+      const sample = unregistered.find((c) => c.event.titleId === titleId)!;
+      const event = await fetchEvent(sample.event.eventId);
+      const n = normalizeEvent(event);
+      state.cineStarTitles[titleId] = resolveFilm(state, {
+        chain: "cinestar",
+        externalId: n.film.externalId,
+        title: n.film.title,
+        originalTitle: n.film.originalTitle,
+      });
+      // One lookup also happens to name one hall; the rest stay unnamed, which
+      // only affects a label.
+      learnHallName(state, sample, n.hall.externalId, n.hall.name);
+      result.titlesLookedUp += 1;
     },
     {
       minIntervalMs: REQUEST_INTERVAL_MS,
       deadline: opts.deadline,
-      onError: (eventId, err) => {
-        if (err instanceof EventGoneError) return; // already out of the sales window
-        result.errors.push(`event ${eventId}: ${String(err)}`);
+      onError: (titleId, err) => {
+        // A sold-out or withdrawn sample event is not worth a loud failure;
+        // the next run picks another screening of the same film.
+        if (err instanceof EventGoneError) return;
+        result.errors.push(`title ${titleId}: ${String(err)}`);
       },
     },
   );
 
+  for (const c of unregistered) {
+    const filmId = state.cineStarTitles[c.event.titleId];
+    if (filmId === undefined) {
+      // Its title lookup did not happen this run — try again on the next one
+      // rather than registering a screening we cannot name.
+      result.titlesUnresolved += 1;
+      continue;
+    }
+    registerScreening(state, c, filmId);
+    result.registered += 1;
+  }
+
   return result;
 }
 
-function registerScreening(
-  state: State,
-  event: Awaited<ReturnType<typeof fetchEvent>>,
-  cinema: CineStarCinema,
-): void {
-  const n = normalizeEvent(event);
-
+function hallKeyFor(state: State, c: Candidate, hallExternalId: string): string {
   const cinemaKey = upsertCinema(state, {
-    chain: n.chain,
-    // Keyed on the numeric cinemaid from the event, named from the programme
-    // page it came from — the event payload carries no cinema name.
-    externalId: n.cinema.externalId,
-    name: cinema.name,
-    city: cinema.city,
+    chain: "cinestar",
+    // Keyed on the numeric cinemaid the programme page publishes, named from
+    // the page it came from — neither payload carries a cinema name.
+    externalId: c.cinemaId,
+    name: c.cinema.name,
+    city: c.cinema.city,
   });
-
-  const hallKey = upsertHall(state, {
-    chain: n.chain,
-    externalId: n.hall.externalId,
+  return upsertHall(state, {
+    chain: "cinestar",
+    externalId: hallExternalId,
     cinemaKey,
-    name: n.hall.name,
   });
+}
 
-  const filmId = resolveFilm(state, {
-    chain: n.chain,
-    externalId: n.film.externalId,
-    title: n.film.title,
-    originalTitle: n.film.originalTitle,
-  });
+function learnHallName(state: State, c: Candidate, hallExternalId: string, name: string): void {
+  const k = hallKeyFor(state, c, hallExternalId);
+  const hall = state.halls[k];
+  if (hall) hall.name = name;
+}
+
+function registerScreening(state: State, c: Candidate, filmId: number): void {
+  const hallKey = hallKeyFor(state, c, c.event.objectId);
 
   upsertScreening(state, {
-    chain: n.chain,
-    externalId: n.externalId,
+    chain: "cinestar",
+    externalId: c.event.eventId,
     filmId,
     hallKey,
-    startsAt: n.startsAt,
-    day: businessDay(event.start),
-    formats: n.formatAttrs,
-    lang: n.languageVersion,
+    startsAt: c.event.startsAt,
+    day: businessDayFromInstant(c.event.startsAt),
+    formats: normalizeFormats(c.event.properties),
+    lang: versionFromProperties(c.event.properties),
     soldOut: false,
     // Poll straight away so a newly listed screening gets its baseline.
     nextPollAt: new Date(),

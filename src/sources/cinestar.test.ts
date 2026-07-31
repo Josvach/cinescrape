@@ -10,6 +10,7 @@ import {
   parseProgramme,
   readOccupancy,
   splitVersion,
+  versionFromProperties,
   type CsEvent,
   type CsHall,
 } from "./cinestar";
@@ -69,7 +70,7 @@ describe("readOccupancy", () => {
 
 describe("parseProgramme", () => {
   it("pulls scheduled events out of the Nuxt payload", () => {
-    const events = parseProgramme(programmeHtml);
+    const { events } = parseProgramme(programmeHtml);
     expect(events.length).toBeGreaterThan(300);
 
     const known = events.find((e) => e.eventId === "1742965");
@@ -77,18 +78,54 @@ describe("parseProgramme", () => {
     // The programme payload carries a real UTC offset, unlike event/get.
     expect(known!.startsAt.toISOString()).toBe("2026-07-31T08:00:00.000Z");
     expect(known!.objectId).toBe("628");
+    expect(known!.titleId).toBe("10912");
+  });
+
+  it("reads the property tags each screening carries", () => {
+    const { events } = parseProgramme(programmeHtml);
+    const known = events.find((e) => e.eventId === "1742965")!;
+    // These are what save an event lookup per screening.
+    expect(known.properties).toContain("Dabing");
+    expect(known.properties).toContain("4K");
+  });
+
+  it("maps halls to their cinema", () => {
+    const { hallCinemas } = parseProgramme(programmeHtml);
+    expect(Object.keys(hallCinemas).length).toBeGreaterThan(0);
+    // Hall 646 belongs to cinema 11 (Praha Anděl) per the page's own records.
+    expect(hallCinemas["646"]).toBe("11");
+  });
+
+  it("needs far fewer title lookups than there are screenings", () => {
+    // This ratio is the whole point: one event/get per film version, not per
+    // screening, is what lets a single run register the entire schedule.
+    const { events } = parseProgramme(programmeHtml);
+    const titles = new Set(events.map((e) => e.titleId));
+    expect(titles.size).toBeLessThan(events.length / 5);
   });
 
   it("returns unique event ids", () => {
-    const events = parseProgramme(programmeHtml);
+    const { events } = parseProgramme(programmeHtml);
     expect(new Set(events.map((e) => e.eventId)).size).toBe(events.length);
   });
 
   it("returns nothing rather than throwing on an unexpected page", () => {
-    expect(parseProgramme("<html><body>nope</body></html>")).toEqual([]);
-    expect(parseProgramme('<script type="application/json" id="__NUXT_DATA__">{bad</script>')).toEqual(
-      [],
-    );
+    expect(parseProgramme("<html><body>nope</body></html>").events).toEqual([]);
+    expect(
+      parseProgramme('<script type="application/json" id="__NUXT_DATA__">{bad</script>').events,
+    ).toEqual([]);
+  });
+});
+
+describe("versionFromProperties", () => {
+  it("reads the language version off the property tags", () => {
+    expect(versionFromProperties(["4K", "Dabing", "HIT"])).toBe("dabing");
+    expect(versionFromProperties(["Titulky", "Premium"])).toBe("titulky");
+  });
+
+  it("returns nothing when the tags say nothing about language", () => {
+    expect(versionFromProperties(["HIT", "Premiéra"])).toBeNull();
+    expect(versionFromProperties([])).toBeNull();
   });
 });
 
