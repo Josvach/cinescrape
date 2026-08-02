@@ -7,6 +7,7 @@
 
 import { CC_ESTIMATED_TICKET_PRICE_CZK } from "@/ingest/cinemacity";
 import { recentCoverage } from "@/ingest/settle";
+import { latestTotals } from "@/ingest/ufd";
 import { pragueDate } from "@/lib/time";
 import type { Article, History, Rating, Screening as Screening0, State } from "@/store/types";
 
@@ -44,6 +45,38 @@ export type LiveFilm = {
   ramp: Record<string, number>;
   rating?: Rating;
   articles?: Article[];
+  /**
+   * The film's national run total as last reported by UFD, and how much our
+   * live scraping has added since that report.
+   */
+  official?: {
+    admissions: number;
+    gross: number;
+    /** `YYYY-MM-DD` of the weekend the figure covers. */
+    asOf: string;
+    /** Measured by us for screening days after that weekend. */
+    sinceAdmissions: number;
+  };
+};
+
+/** One film's line in a published weekly ranking. */
+export type OfficialEntry = {
+  rank: number;
+  title: string;
+  filmId?: number;
+  distributor: string;
+  weekOfRun: number;
+  cinemas: number;
+  weekendAdmissions: number;
+  weekendGross: number;
+  totalAdmissions: number;
+  totalGross: number;
+};
+
+export type OfficialWeek = {
+  weekendFrom: string;
+  entries: OfficialEntry[];
+  totalAdmissions: number;
 };
 
 export type LiveDay = {
@@ -114,6 +147,8 @@ export type Live = {
   films: LiveFilm[];
   ramp: { at: string; sold: number }[];
   coverage: { total: number; missed: number; partial: number };
+  /** The most recent published weekly ranking, if we have one. */
+  official?: OfficialWeek;
 };
 
 /** Admissions for a screening: frozen if it has run, live presale if not. */
@@ -301,9 +336,31 @@ export function computeLive(state: State, history: History): Live {
   const dayList = [...days.values()].sort((a, b) => a.day.localeCompare(b.day));
   const weekFrom = shiftDay(today, -6);
 
+  // --- official results own everything up to the last published weekend -----
+  const officialTotals = latestTotals(history);
+  for (const f of films.values()) {
+    const official = officialTotals.get(f.id);
+    if (!official) continue;
+    // Their report covers the weekend and everything before it; our scraping
+    // covers the days after. The Monday after the reported weekend is where
+    // one hands over to the other.
+    const handover = shiftDay(official.weekendFrom, 4);
+    const since = Object.entries(f.byDay)
+      .filter(([day]) => day >= handover)
+      .reduce((sum, [, admissions]) => sum + admissions, 0);
+    f.official = {
+      admissions: official.admissions,
+      gross: official.gross,
+      asOf: official.weekendFrom,
+      sinceAdmissions: since,
+    };
+  }
+
   const filmList = [...films.values()]
     .filter((f) => f.admissions > 0)
-    .sort((a, b) => b.admissions - a.admissions);
+    // Rank on the best figure available for each film: the official run total
+    // plus what we have measured since, falling back to our own count.
+    .sort((a, b) => totalOf(b) - totalOf(a));
 
   return {
     generatedAt: new Date().toISOString(),
@@ -321,6 +378,25 @@ export function computeLive(state: State, history: History): Live {
     films: filmList,
     ramp: rampTotals,
     coverage: recentCoverage(state, history, 7),
+    official: latestOfficialWeek(history),
+  };
+}
+
+/** Best available run total: official plus what we have measured since. */
+export const totalOf = (f: LiveFilm): number =>
+  f.official ? f.official.admissions + f.official.sinceAdmissions : f.admissions;
+
+function latestOfficialWeek(history: History): OfficialWeek | undefined {
+  const weeks = Object.values(history.ufd ?? {})
+    .filter((w) => w.weekendFrom)
+    .sort((a, b) => a.weekendFrom.localeCompare(b.weekendFrom));
+  const latest = weeks[weeks.length - 1];
+  if (!latest) return undefined;
+
+  return {
+    weekendFrom: latest.weekendFrom,
+    entries: latest.entries,
+    totalAdmissions: latest.entries.reduce((s, e) => s + e.weekendAdmissions, 0),
   };
 }
 

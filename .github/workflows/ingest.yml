@@ -19,6 +19,11 @@ on:
   schedule:
     - cron: "13 * * * *"
   workflow_dispatch:
+    inputs:
+      backfill:
+        description: "Natáhnout celý archiv UFD (jednorázově, ~6 minut)"
+        type: boolean
+        default: false
 
 concurrency:
   # Two runs writing the same published state would lose one of them.
@@ -62,6 +67,14 @@ jobs:
           else
             echo "no published branch yet — first run, starting empty"
           fi
+
+      - name: Backfill the UFD archive
+        # Ten years of weekly reports, fetched once. Weeks already stored are
+        # skipped, so re-running costs almost nothing.
+        if: inputs.backfill
+        env:
+          BACKFILL_BUDGET_MS: "1500000"
+        run: npm run ingest -- backfill
 
       - name: Scrape and publish every five minutes for the rest of the hour
         env:

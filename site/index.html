@@ -169,6 +169,15 @@
       }
       .rating b { font-size: 13px; font-weight: 640; color: var(--text-primary); font-variant-numeric: tabular-nums; }
 
+      /* Marks a figure as the association's official national number rather
+         than our own measurement — the two are not the same thing. */
+      .official {
+        display: inline-block; font-size: 9.5px; text-transform: uppercase;
+        letter-spacing: 0.05em; color: var(--series-2); border: 1px solid currentColor;
+        border-radius: 3px; padding: 0 3px; margin-left: 5px; vertical-align: 1px;
+        font-weight: 600;
+      }
+
       .article {
         display: block; padding: 11px 0; border-top: 1px solid var(--border);
         color: inherit; text-decoration: none;
@@ -483,15 +492,57 @@
         ].filter(Boolean);
       }
 
-      function filmRow(f, i, top, subtitle, value, unit) {
+      function filmRow(f, i, top, subtitle, value, unit, badge) {
         return el("button", { class: "rank", onclick: () => go({ page: "film", filmId: f.id }) },
           el("span", { class: "pos" }, i + 1),
           el("span", { class: "body" },
-            el("span", { class: "name" }, f.title),
+            el("span", { class: "name" }, f.title,
+              badge && el("span", { class: "official", title: badge.title }, badge.text)),
             el("span", { class: "meta" }, subtitle),
             el("span", { class: "sharebar" },
               el("i", { style: `width:${top ? (value / top) * 100 : 0}%` }))),
           el("span", { class: "num" }, el("b", {}, num(value)), el("span", {}, unit)));
+      }
+
+      /**
+       * Best run total for a film: the association's national figure plus what
+       * we have measured since it was published, or our own count when the film
+       * has never appeared in their top 20.
+       */
+      const runTotal = (f) =>
+        f.official ? f.official.admissions + f.official.sinceAdmissions : f.admissions;
+
+      const runTotalTop = (films) => (films.length ? runTotal(films[0]) : 0);
+
+      /**
+       * The cumulative ranking. A film that has appeared in a UFD top 20 shows
+       * the official national figure plus whatever we have measured since it
+       * was published; one that never has shows only our own count, and says so.
+       */
+      function overallList(films) {
+        if (!films.length) return el("p", { class: "empty" }, "Zatím žádná data — sběr právě začal.");
+        const top = runTotalTop(films);
+
+        return films.map((f, i) => {
+          const meta = f.official
+            ? [
+                `${num(f.official.admissions)} oficiálně k ${dayLabel(f.official.asOf)}`,
+                f.official.sinceAdmissions > 0 &&
+                  `+${num(f.official.sinceAdmissions)} naměřeno od té doby`,
+                `${num(f.screenings)} projekcí u nás`,
+              ]
+            : [
+                `${num(f.screenings)} projekcí`,
+                `${f.cinemas} kin`,
+                `${pct(f.occupancy)} sálu`,
+                "jen naše měření",
+              ];
+          const badge = f.official
+            ? { text: "UFD", title: `Oficiální data UFD k víkendu ${dayLabel(f.official.asOf)}` }
+            : null;
+
+          return filmRow(f, i, top, meta.filter(Boolean).join(" · "), runTotal(f), "diváků", badge);
+        });
       }
 
       function screeningTable(rows, timeFirst) {
@@ -507,10 +558,47 @@
             el("td", {}, s.capacity > 0 ? pct(s.admissions / s.capacity) : "—")))));
       }
 
+      /** The association's published weekend ranking, exactly as they report it. */
+      function officialWeekCard(week) {
+        if (!week) return null;
+
+        const rows = week.entries.slice(0, 20).map((e) => {
+          const label = `${e.rank}. ${e.title}`;
+          const name = e.filmId
+            ? el("a", {
+                href: `#film-${e.filmId}`,
+                style: "text-decoration:underline;text-underline-offset:2px",
+                onclick: (ev) => {
+                  ev.preventDefault();
+                  go({ page: "film", filmId: e.filmId });
+                },
+              }, label)
+            : label;
+
+          return el("tr", {},
+            el("td", {}, name,
+              el("span", { style: "display:block;color:var(--text-muted);font-size:11.5px" },
+                [e.distributor, `${e.cinemas} kin`].filter(Boolean).join(" · "))),
+            el("td", {}, num(e.weekendAdmissions)),
+            el("td", {}, num(e.totalAdmissions)),
+            el("td", {}, `${e.weekOfRun}.`));
+        });
+
+        return el("section", { class: "card" },
+          el("h2", {}, "Oficiální víkend — UFD"),
+          el("p", { class: "caption" },
+            `Víkend od ${dayLabel(week.weekendFrom)} · ${num(week.totalAdmissions)} diváků v TOP 20. ` +
+            "Národní data za všechna kina, zveřejněná Unií filmových distributorů."),
+          el("table", { class: "data" },
+            el("thead", {}, el("tr", {},
+              el("th", {}, "Film"), el("th", {}, "Víkend"),
+              el("th", {}, "Celkem"), el("th", {}, "Týden"))),
+            el("tbody", {}, rows)));
+      }
+
       function homePage(d) {
         const t = d.today;
         const topToday = t.films[0]?.admissions || 0;
-        const topAll = d.films[0]?.admissions || 0;
 
         return el("div", {},
           el("header", { class: "masthead" },
@@ -567,16 +655,11 @@
           el("section", { class: "card" },
             el("h2", {}, "Celkově — filmy v kinech"),
             el("p", { class: "caption" },
-              "Kumulativně za celé nasazení, včetně toho, co je prodáno dopředu."),
-            d.films.length === 0
-              ? el("p", { class: "empty" }, "Zatím žádná data — sběr právě začal.")
-              : d.films.map((f, i) =>
-                  filmRow(f, i, topAll,
-                    [`${num(f.screenings)} projekcí`, `${f.cinemas} kin`, `${pct(f.occupancy)} sálu`,
-                     f.sellouts > 0 && `${f.sellouts}× vyprodáno`,
-                     f.upcoming > 0 && `${num(f.upcoming)} v předprodeji`]
-                      .filter(Boolean).join(" · "),
-                    f.admissions, "diváků"))),
+              "Za celé nasazení. U filmů z TOP 20 platí oficiální národní čísla UFD " +
+              "do posledního zveřejněného víkendu, k nim se přičítá to, co jsme naměřili od té doby."),
+            overallList(d.films)),
+
+          officialWeekCard(d.official),
 
           el("section", { class: "card" },
             el("h2", {}, "Návštěvnost po dnech"),
