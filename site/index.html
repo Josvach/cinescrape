@@ -483,70 +483,117 @@
         ].filter(Boolean);
       }
 
+      function filmRow(f, i, top, subtitle, value, unit) {
+        return el("button", { class: "rank", onclick: () => go({ page: "film", filmId: f.id }) },
+          el("span", { class: "pos" }, i + 1),
+          el("span", { class: "body" },
+            el("span", { class: "name" }, f.title),
+            el("span", { class: "meta" }, subtitle),
+            el("span", { class: "sharebar" },
+              el("i", { style: `width:${top ? (value / top) * 100 : 0}%` }))),
+          el("span", { class: "num" }, el("b", {}, num(value)), el("span", {}, unit)));
+      }
+
+      function screeningTable(rows, timeFirst) {
+        return el("table", { class: "data" },
+          el("thead", {}, el("tr", {},
+            el("th", {}, "Projekce"), el("th", {}, "Diváci"), el("th", {}, "Naplnění"))),
+          el("tbody", {}, rows.map((s) => el("tr", {},
+            el("td", {},
+              timeFirst ? `${timeLabel(s.startsAt)} · ${s.film}` : `${s.film} · ${timeLabel(s.startsAt)}`,
+              el("span", { style: "display:block;color:var(--text-muted);font-size:11.5px" },
+                [s.cinema, s.hall].filter(Boolean).join(" · "))),
+            el("td", {}, `${num(s.admissions)}/${num(s.capacity)}`),
+            el("td", {}, s.capacity > 0 ? pct(s.admissions / s.capacity) : "—")))));
+      }
+
       function homePage(d) {
-        const top = d.films[0]?.admissions || 0;
+        const t = d.today;
+        const topToday = t.films[0]?.admissions || 0;
+        const topAll = d.films[0]?.admissions || 0;
+
         return el("div", {},
           el("header", { class: "masthead" },
             el("h1", {}, "CineScrape"),
             el("span", { class: "sub" }, "aktualizováno ", timeLabel(d.generatedAt))),
 
+          // ---- DNES -----------------------------------------------------
           el("section", { class: "card" },
             el("h2", {}, "Dnes v kinech"),
-            el("p", { class: "caption" }, "Prodané lístky na dnešní projekce, včetně těch, které ještě neproběhly."),
-            el("div", { class: "hero" }, num(d.totals.today)),
+            el("p", { class: "caption" },
+              `${wdLabel(d.date)} ${dayLabel(d.date)} — prodané lístky na dnešní projekce, včetně těch, které ještě neproběhly.`),
+            el("div", { class: "hero" }, num(t.admissions)),
             el("div", { class: "hero-unit" },
-              "diváků dnes" +
-              (d.totals.todaySeatsOffered > 0
-                ? ` · ${pct(d.totals.today / d.totals.todaySeatsOffered)} naplnění sálů` : "")),
+              "diváků dnes" + (t.seatsOffered > 0 ? ` · ${pct(t.occupancy)} naplnění sálů` : "")),
             el("div", { class: "tiles" },
-              tile("Posledních 7 dní", num(d.totals.week), "diváků"),
-              tile("Předprodej", num(d.totals.upcoming), "na příští dny"),
-              tile("Tržby (odhad)", czk(d.totals.gross), "za sledované období"),
-              tile("Pro filmaře", czk(d.totals.filmmaker), "při 50 % podílu"))),
+              tile("Projekce dnes", num(t.screenings),
+                `${num(t.screeningsDone)} už proběhlo`),
+              tile("Prodáno dnes", `+${num(t.soldToday)}`, "lístků za dnešek"),
+              tile("Tržby dnes", czk(t.gross), "odhad"),
+              tile("Pro filmaře", czk(t.filmmaker), "50 % podíl")),
+            t.sellouts > 0 &&
+              el("div", { class: "notice" }, el("span", { "aria-hidden": "true" }, "★"),
+                el("span", {}, `${t.sellouts}× vyprodáno`))),
+
+          t.ramp.length > 1 &&
+            el("section", { class: "card" },
+              el("h2", {}, "Prodej lístků dnes"),
+              el("p", { class: "caption" },
+                "Kolik lístků se dnes prodalo, po hodinách — na jakoukoli projekci, ne jen dnešní."),
+              rampChart(t.ramp, "todayramp")),
+
+          t.films.length > 0 &&
+            el("section", { class: "card" },
+              el("h2", {}, "Filmy dnes"),
+              el("p", { class: "caption" }, "Podle dnešní návštěvnosti."),
+              t.films.map((f, i) =>
+                filmRow(f, i, topToday,
+                  `${num(f.screenings)} projekcí · ${pct(f.occupancy)} sálu`,
+                  f.admissions, "diváků"))),
+
+          t.fullest.length > 0 &&
+            el("section", { class: "card" },
+              el("h2", {}, "Nejlepší projekce dneška"),
+              el("p", { class: "caption" }, "Nejvíc zaplněné sály dnes, od 40 míst."),
+              screeningTable(t.fullest, false)),
+
+          t.upcoming.length > 0 &&
+            el("section", { class: "card" },
+              el("h2", {}, "Ještě dnes začíná"),
+              el("p", { class: "caption" }, "Nejbližší projekce a jak jsou zatím prodané."),
+              screeningTable(t.upcoming, true)),
+
+          // ---- CELKOVĚ --------------------------------------------------
+          el("section", { class: "card" },
+            el("h2", {}, "Celkově — filmy v kinech"),
+            el("p", { class: "caption" },
+              "Kumulativně za celé nasazení, včetně toho, co je prodáno dopředu."),
+            d.films.length === 0
+              ? el("p", { class: "empty" }, "Zatím žádná data — sběr právě začal.")
+              : d.films.map((f, i) =>
+                  filmRow(f, i, topAll,
+                    [`${num(f.screenings)} projekcí`, `${f.cinemas} kin`, `${pct(f.occupancy)} sálu`,
+                     f.sellouts > 0 && `${f.sellouts}× vyprodáno`,
+                     f.upcoming > 0 && `${num(f.upcoming)} v předprodeji`]
+                      .filter(Boolean).join(" · "),
+                    f.admissions, "diváků"))),
 
           el("section", { class: "card" },
             el("h2", {}, "Návštěvnost po dnech"),
             el("p", { class: "caption" },
               "Lístek se počítá ke dni projekce — co se dnes prodá na zítřek, roste v zítřejším sloupci."),
-            dailyBars(d.days, d.today, "home")),
+            dailyBars(d.days, d.date, "home"),
+            el("div", { class: "tiles", style: "margin-top:16px" },
+              tile("Posledních 7 dní", num(d.totals.week), "diváků"),
+              tile("Předprodej", num(d.totals.presale), "na příští dny"),
+              tile("Tržby celkem", czk(d.totals.gross), "odhad"),
+              tile("Pro filmaře", czk(d.totals.filmmaker), "50 % podíl"))),
 
           d.ramp.length > 1 &&
             el("section", { class: "card" },
-              el("h2", {}, "Jak nabíhá prodej"),
-              el("p", { class: "caption" }, "Kumulativně změřené lístky za všechna kina."),
+              el("h2", {}, "Jak nabíhá prodej celkově"),
+              el("p", { class: "caption" }, "Kumulativně změřené lístky za všechna sledovaná kina."),
               rampChart(d.ramp, "homeramp")),
-
-          el("section", { class: "card" },
-            el("h2", {}, "Žebříček filmů"),
-            el("p", { class: "caption" }, "Za posledních 14 dní plus vše, co je už prodáno dopředu."),
-            d.films.length === 0
-              ? el("p", { class: "empty" }, "Zatím žádná data — sběr právě začal.")
-              : d.films.map((f, i) =>
-                  el("button", { class: "rank", onclick: () => go({ page: "film", filmId: f.id }) },
-                    el("span", { class: "pos" }, i + 1),
-                    el("span", { class: "body" },
-                      el("span", { class: "name" }, f.title),
-                      el("span", { class: "meta" },
-                        [`${num(f.screenings)} projekcí`, `${f.cinemas} kin`, `${pct(f.occupancy)} sálu`,
-                         f.sellouts > 0 && `${f.sellouts}× vyprodáno`,
-                         f.upcoming > 0 && `${num(f.upcoming)} v předprodeji`]
-                          .filter(Boolean).join(" · ")),
-                      el("span", { class: "sharebar" },
-                        el("i", { style: `width:${top ? (f.admissions / top) * 100 : 0}%` }))),
-                    el("span", { class: "num" }, el("b", {}, num(f.admissions)), el("span", {}, "diváků")))),
-          ),
-
-          d.fullest.length > 0 &&
-            el("section", { class: "card" },
-              el("h2", {}, "Nejplnější projekce"),
-              el("p", { class: "caption" }, "Posledních pár dní, sály od 50 míst."),
-              el("table", { class: "data" },
-                el("thead", {}, el("tr", {},
-                  el("th", {}, "Projekce"), el("th", {}, "Diváci"), el("th", {}, "Naplnění"))),
-                el("tbody", {}, d.fullest.map((s) => el("tr", {},
-                  el("td", {}, `${s.film} — ${s.cinema}, ${timeLabel(s.startsAt)}`),
-                  el("td", {}, `${num(s.admissions)}/${num(s.capacity)}`),
-                  el("td", {}, pct(s.admissions / s.capacity))))))),
 
           ...coverageNotices(d.coverage));
       }
@@ -557,7 +604,7 @@
 
         const days = d.days
           .map((day) => ({ ...day, admissions: f.byDay[day.day] || 0, seatsOffered: 0, screenings: 0 }))
-          .filter((day) => day.admissions > 0 || day.day >= d.today);
+          .filter((day) => day.admissions > 0 || day.day >= d.date);
         const ramp = Object.entries(f.ramp).sort().map(([at, sold]) => ({ at, sold }));
 
         return el("div", {},
@@ -596,7 +643,7 @@
           el("section", { class: "card" },
             el("h2", {}, "Návštěvnost po dnech"),
             el("p", { class: "caption" }, "Podle dne projekce, ne dne prodeje."),
-            dailyBars(days, d.today, "filmdays")),
+            dailyBars(days, d.date, "filmdays")),
 
           el("section", { class: "card" },
             el("h2", {}, "Kde se hraje"),
