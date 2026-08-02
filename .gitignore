@@ -6,3 +6,6 @@ _site/
 data/
 *.tsbuildinfo
 .DS_Store
+
+# Dead build output from the Next.js version this project no longer uses.
+.next/

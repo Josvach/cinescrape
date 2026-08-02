@@ -16,6 +16,7 @@
 import { CC_ESTIMATED_TICKET_PRICE_CZK } from "@/ingest/cinemacity";
 import { recentCoverage } from "@/ingest/settle";
 import { allTimeRanking, latestTotals, type AllTimeEntry } from "@/ingest/ufd";
+import { CHAIN_LABELS } from "@/lib/format";
 import { pragueDate } from "@/lib/time";
 import type { Article, History, Rating, Screening as Stored, State } from "@/store/types";
 
@@ -166,11 +167,6 @@ export function startOfWeek(iso: string): string {
   const dow = d.getUTCDay();
   return shiftDay(iso, dow === 0 ? -6 : 1 - dow);
 }
-
-const CHAIN_LABELS: Record<string, string> = {
-  cinema_city: "Cinema City",
-  cinestar: "CineStar",
-};
 
 const emptyPeriod = (id: number, title: string): PeriodFilm => ({
   id,

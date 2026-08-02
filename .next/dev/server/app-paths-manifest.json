@@ -1,5 +1,0 @@
-{
-  "/api/cron/settle/route": "app/api/cron/settle/route.js",
-  "/film/[id]/page": "app/film/[id]/page.js",
-  "/page": "app/page.js"
-}
