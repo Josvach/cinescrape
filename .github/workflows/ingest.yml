@@ -26,9 +26,16 @@ on:
         default: false
 
 concurrency:
-  # Two runs writing the same published state would lose one of them.
+  # Two runs writing the same published state would lose one of them, so the
+  # hourly schedule never overlaps itself.
+  #
+  # A manual run preempts instead of queueing. The job holds its runner for
+  # fifty minutes, so waiting would mean up to an hour before anything a person
+  # asked for actually happened — and cancelling costs almost nothing, because
+  # the loop publishes after every iteration and reloads its state from the
+  # published branch when it restarts.
   group: ingest
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 permissions:
   contents: write
@@ -74,7 +81,13 @@ jobs:
         if: inputs.backfill
         env:
           BACKFILL_BUDGET_MS: "1500000"
-        run: npm run ingest -- backfill
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        # Published straight away rather than waiting for the first scrape
+        # iteration, so the archive is on the page as soon as it is downloaded.
+        run: |
+          npm run ingest -- backfill
+          bash scripts/publish.sh
 
       - name: Scrape and publish every five minutes for the rest of the hour
         env:
