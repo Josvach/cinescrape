@@ -20,6 +20,7 @@ import { ingestCinemaCity } from "@/ingest/cinemacity";
 import { refreshFilmContext } from "@/ingest/context";
 import { discoverCineStarSchedule, pollCineStarHalls } from "@/ingest/cinestar";
 import { settleScreenings } from "@/ingest/settle";
+import { ingestUfd } from "@/ingest/ufd";
 import { computeLive } from "@/stats/compute";
 import { loadHistory, loadState, saveHistory, saveLive, saveState } from "@/store/store";
 
@@ -27,8 +28,39 @@ import { loadHistory, loadState, saveHistory, saveLive, saveState } from "@/stor
 const DEFAULT_BUDGET_MS = 3 * 60_000;
 
 async function main() {
+  if (process.argv.includes("backfill")) return backfill();
   if (process.argv.includes("loop")) return loop();
   await once(process.argv.includes("discover"));
+}
+
+/**
+ * Walk the whole UFD archive.
+ *
+ * A one-off, run by hand, with the clock to itself — sharing the ingest budget
+ * left it nothing after both chains had been scraped, and it fetched no files
+ * at all. Repeat runs are cheap because weeks already stored are skipped.
+ */
+async function backfill() {
+  const startedAt = Date.now();
+  const state = await loadState();
+  const history = await loadHistory();
+
+  const result = await ingestUfd(state, history, {
+    deadline: startedAt + Number(process.env.BACKFILL_BUDGET_MS ?? 45 * 60_000),
+    backfill: true,
+  });
+
+  await saveHistory(history);
+  await saveLive(computeLive(state, history));
+
+  console.log(
+    `backfill ${((Date.now() - startedAt) / 1000).toFixed(0)}s`,
+    JSON.stringify({ ...result, unmatched: result.unmatched.length, errors: result.errors.length }),
+  );
+  if (result.unmatched.length) {
+    console.log(`nespárováno s naším katalogem: ${result.unmatched.slice(0, 12).join(", ")}`);
+  }
+  for (const e of result.errors.slice(0, 5)) console.warn(`  ${e}`);
 }
 
 /**
@@ -124,6 +156,18 @@ async function once(withDiscovery: boolean) {
   }
 
   report.settle = settleScreenings(state, history);
+
+  // UFD publishes on Monday and is checked twice a day; `backfill` walks the
+  // whole archive and is meant to be run once by hand.
+  try {
+    const ufd = await ingestUfd(state, history, { deadline: startedAt + budgetMs * 1.2 });
+    if (ufd.weeksAdded > 0 || ufd.errors.length > 0) {
+      report.ufd = { ...ufd, unmatched: ufd.unmatched.length, errors: ufd.errors.length };
+    }
+    errors.push(...ufd.errors);
+  } catch (err) {
+    errors.push(`ufd: ${String(err)}`);
+  }
 
   // Last, and only with whatever budget is left over: articles and ratings are
   // the one part of this that is still there if a run skips it.

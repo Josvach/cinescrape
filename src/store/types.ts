@@ -139,12 +139,45 @@ export type HistoryDay = {
   coverage: { total: number; final: number; partial: number; missed: number };
 };
 
+/** One film's line in one UFD weekly report. */
+export type UfdEntry = {
+  rank: number;
+  title: string;
+  distributor: string;
+  weekOfRun: number;
+  cinemas: number;
+  weekendAdmissions: number;
+  weekendGross: number;
+  totalAdmissions: number;
+  totalGross: number;
+  /** Our film id, when the title could be matched to something we track. */
+  filmId?: number;
+};
+
+export type UfdWeekRecord = {
+  year: number;
+  week: number;
+  /** `YYYY-MM-DD`, the Thursday the weekend opened on. */
+  weekendFrom: string;
+  entries: UfdEntry[];
+};
+
 export type History = {
   version: 1;
   /** `YYYY-MM-DD` → totals. */
   days: Record<string, HistoryDay>;
   /** Film id → display metadata, so history stays readable on its own. */
   films: Record<string, { title: string; originalTitle: string | null }>;
+  /**
+   * Official weekly results, keyed `YYYY-Www`.
+   *
+   * Authoritative for everything up to the last published Monday: national
+   * rather than our two-chain sample, and the figure the industry quotes. The
+   * scraping covers the days since.
+   */
+  ufd?: Record<string, UfdWeekRecord>;
+  /** ISO instant of the last successful UFD refresh. */
+  ufdCheckedAt?: string;
 };
 
 export function emptyState(): State {
