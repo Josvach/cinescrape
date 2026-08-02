@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const html = readFileSync(fileURLToPath(new URL("../site/index.html", import.meta.url)), "utf8");
+const script = readFileSync(fileURLToPath(new URL("../site/app.js", import.meta.url)), "utf8");
 
 /**
  * The dashboard is a hand-written page with no build step, so nothing would
@@ -15,22 +16,26 @@ const html = readFileSync(fileURLToPath(new URL("../site/index.html", import.met
  * the browser will.
  */
 describe("site/index.html", () => {
-  const script = html.match(/<script type="module">([\s\S]*?)<\/script>/)?.[1];
-
-  it("has an inline module", () => {
-    expect(script).toBeTruthy();
+  it("loads its module", () => {
+    expect(html).toContain('src="app.js"');
+    expect(script.length).toBeGreaterThan(1000);
   });
 
   it("parses as JavaScript", () => {
     const file = join(mkdtempSync(join(tmpdir(), "cinescrape-site-")), "page.mjs");
-    writeFileSync(file, script!);
+    writeFileSync(file, script);
     expect(() => execFileSync(process.execPath, ["--check", file])).not.toThrow();
   });
 
   it("only fetches its own data file", () => {
     // A strict-CSP host and an offline phone both punish an external request.
-    const urls = script!.match(/fetch\(\s*[`"'][^`"']+/g) ?? [];
+    const urls = script.match(/fetch\(\s*[`"'][^`"']+/g) ?? [];
     expect(urls.every((u) => !/https?:/.test(u))).toBe(true);
+  });
+
+  it("has the bottom navigation the whole layout depends on", () => {
+    expect(html).toContain('id="nav"');
+    for (const tab of ["Dnes", "Týden", "Celkově"]) expect(script).toContain(tab);
   });
 
   it("declares the icon and manifest the home-screen install needs", () => {

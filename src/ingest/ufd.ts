@@ -202,20 +202,38 @@ function matchFilm(state: State, title: string): number | undefined {
 }
 
 /**
- * The most recent cumulative total UFD has reported for a film.
+ * How far back a report may be and still describe the run a film is in now.
  *
- * A film appears in many weekly tables; its run total only grows, so the
- * highest figure across them is the latest one — and it survives a week where
- * the film dropped out of the top 20 and came back.
+ * Even the longest Czech runs finish inside about four months, so anything
+ * older belongs to a different release. Without this bound, a film returning
+ * to cinemas inherits its previous run: "Tlapková patrola ve velkofilmu"
+ * showed 339 332 admissions taken from its complete 2023 run, which is what
+ * made the cumulative ranking read as nonsense.
+ */
+const CURRENT_RUN_DAYS = 200;
+
+/**
+ * The most recent cumulative total UFD has reported for a film's current run.
+ *
+ * A film appears in many weekly tables and its run total only grows, so the
+ * highest figure is the latest one — which also survives a week where the film
+ * dropped out of the top 20 and came back. The window keeps that from reaching
+ * back into an earlier release of the same title.
  */
 export function latestTotals(
   history: History,
+  now: Date = new Date(),
 ): Map<number, { admissions: number; gross: number; weekendFrom: string; title: string }> {
+  const since = new Date(now.getTime() - CURRENT_RUN_DAYS * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+
   const best = new Map<
     number,
     { admissions: number; gross: number; weekendFrom: string; title: string }
   >();
   for (const week of Object.values(history.ufd ?? {})) {
+    if (week.weekendFrom < since) continue;
     for (const e of week.entries) {
       if (e.filmId === undefined) continue;
       const current = best.get(e.filmId);
@@ -230,6 +248,60 @@ export function latestTotals(
     }
   }
   return best;
+}
+
+export type AllTimeEntry = {
+  title: string;
+  admissions: number;
+  gross: number;
+  /** `YYYY-MM-DD` of the last weekend the film was reported in. */
+  lastSeen: string;
+  /** Release year, inferred from the first report we have of that run. */
+  year: number;
+};
+
+/**
+ * The most successful releases in Czech cinemas across the whole archive.
+ *
+ * UFD's run total is cumulative for the life of a release, so a film returning
+ * to cinemas carries on from where it left off — its total keeps climbing. That
+ * gives a precise way to tell a re-release from a different film with the same
+ * name: the total continuing upward is the same release, the total *resetting*
+ * to something smaller is a new one. Splitting on elapsed time instead would
+ * date "Bohemian Rhapsody" to its last re-release rather than its premiere.
+ */
+export function allTimeRanking(history: History, limit = 100): AllTimeEntry[] {
+  const byTitle = new Map<string, AllTimeEntry>();
+
+  const weeks = Object.values(history.ufd ?? {})
+    .filter((w) => w.weekendFrom)
+    .sort((a, b) => a.weekendFrom.localeCompare(b.weekendFrom));
+
+  for (const week of weeks) {
+    for (const e of week.entries) {
+      const key = e.title.trim().toLowerCase();
+      const current = byTitle.get(key);
+      if (!current) {
+        byTitle.set(key, {
+          title: e.title.trim(),
+          admissions: e.totalAdmissions,
+          gross: e.totalGross,
+          lastSeen: week.weekendFrom,
+          // Dated by the first week we ever saw it, which is its premiere —
+          // not by a re-release years later.
+          year: Number(week.weekendFrom.slice(0, 4)),
+        });
+        continue;
+      }
+      // The run total is cumulative for the life of a release, so the largest
+      // figure a title ever reached is what it achieved.
+      current.admissions = Math.max(current.admissions, e.totalAdmissions);
+      current.gross = Math.max(current.gross, e.totalGross);
+      current.lastSeen = week.weekendFrom;
+    }
+  }
+
+  return [...byTitle.values()].sort((a, b) => b.admissions - a.admissions).slice(0, limit);
 }
 
 /** The newest weekend UFD has published, as `YYYY-MM-DD`. */

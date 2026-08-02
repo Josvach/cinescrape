@@ -12,9 +12,14 @@ const PORT = Number(process.env.PORT ?? 4000);
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
+  // Without this a module script is served as octet-stream and the browser
+  // refuses to execute it, leaving a blank page and no error worth the name.
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".webmanifest": "application/manifest+json; charset=utf-8",
   ".svg": "image/svg+xml",
+  ".txt": "text/plain; charset=utf-8",
 };
 
 async function resolve(urlPath) {

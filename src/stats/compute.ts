@@ -3,13 +3,21 @@
  *
  * The page is a static document with no backend, so all the aggregation happens
  * here and ships as `live.json`. That keeps the phone doing nothing but drawing.
+ *
+ * The shape follows what each source is actually good for:
+ *
+ *   today   scraped, minutes old, the only place live data beats the official
+ *           numbers and therefore the reason the scraping exists at all
+ *   week    scraped, since Monday — the stretch UFD has not reported on yet
+ *   allTime official UFD only, because for anything settled their national
+ *           figures are simply better than our two-chain sample
  */
 
 import { CC_ESTIMATED_TICKET_PRICE_CZK } from "@/ingest/cinemacity";
 import { recentCoverage } from "@/ingest/settle";
-import { latestTotals } from "@/ingest/ufd";
+import { allTimeRanking, latestTotals, type AllTimeEntry } from "@/ingest/ufd";
 import { pragueDate } from "@/lib/time";
-import type { Article, History, Rating, Screening as Screening0, State } from "@/store/types";
+import type { Article, History, Rating, Screening as Stored, State } from "@/store/types";
 
 /**
  * Share of box office reaching the production side. Real Czech distribution
@@ -18,48 +26,72 @@ import type { Article, History, Rating, Screening as Screening0, State } from "@
  */
 export const FILMMAKER_SHARE = 0.5;
 
-/** Days of past and future shown on the daily chart. */
-const WINDOW_BACK = 13;
-const WINDOW_FORWARD = 13;
+// --- shared shapes ---------------------------------------------------------
 
-export type LiveFilm = {
+export type Screening = {
+  film: string;
+  filmId: number;
+  cinema: string;
+  hall: string;
+  startsAt: string;
+  admissions: number;
+  capacity: number;
+};
+
+export type DayPoint = {
+  day: string;
+  admissions: number;
+  seatsOffered: number;
+  screenings: number;
+  past: boolean;
+};
+
+/** A film's standing within one period. */
+export type PeriodFilm = {
   id: number;
   title: string;
-  originalTitle: string | null;
   admissions: number;
-  upcoming: number;
   screenings: number;
   seatsOffered: number;
   occupancy: number;
-  gross: number;
-  filmmaker: number;
-  sellouts: number;
-  cinemas: number;
-  perScreening: number;
-  /** Admissions by screening day, for the film's own chart. */
-  byDay: Record<string, number>;
-  chains: Record<string, { admissions: number; seatsOffered: number }>;
-  formats: Record<string, { admissions: number; seatsOffered: number }>;
-  topCinemas: { name: string; admissions: number; seatsOffered: number }[];
-  /** Hourly measured sales, `YYYY-MM-DDTHH` → tickets. */
-  ramp: Record<string, number>;
-  rating?: Rating;
-  articles?: Article[];
-  /**
-   * The film's national run total as last reported by UFD, and how much our
-   * live scraping has added since that report.
-   */
-  official?: {
-    admissions: number;
-    gross: number;
-    /** `YYYY-MM-DD` of the weekend the figure covers. */
-    asOf: string;
-    /** Measured by us for screening days after that weekend. */
-    sinceAdmissions: number;
-  };
 };
 
-/** One film's line in a published weekly ranking. */
+export type Today = {
+  admissions: number;
+  seatsOffered: number;
+  occupancy: number;
+  screenings: number;
+  screeningsDone: number;
+  sellouts: number;
+  gross: number;
+  filmmaker: number;
+  /** Tickets sold during each hour of today, for any screening day. */
+  ramp: { at: string; sold: number }[];
+  soldToday: number;
+  /** Tickets sold in the most recent completed hour. */
+  soldLastHour: number;
+  films: PeriodFilm[];
+  fullest: Screening[];
+  upcoming: Screening[];
+};
+
+export type Week = {
+  /** `YYYY-MM-DD` of Monday. */
+  from: string;
+  to: string;
+  admissions: number;
+  seatsOffered: number;
+  occupancy: number;
+  screenings: number;
+  gross: number;
+  filmmaker: number;
+  /** Already sold for the rest of the week. */
+  presale: number;
+  days: DayPoint[];
+  films: PeriodFilm[];
+  ramp: { at: string; sold: number }[];
+};
+
 export type OfficialEntry = {
   rank: number;
   title: string;
@@ -73,63 +105,36 @@ export type OfficialEntry = {
   totalGross: number;
 };
 
-export type OfficialWeek = {
-  weekendFrom: string;
-  entries: OfficialEntry[];
-  totalAdmissions: number;
+export type AllTime = {
+  weekendFrom?: string;
+  weekendTotal: number;
+  /** The published top 20 for that weekend. */
+  weekend: OfficialEntry[];
+  /** Most successful releases since the archive begins. */
+  ranking: AllTimeEntry[];
+  weeksStored: number;
+  archiveFrom?: string;
 };
 
-export type LiveDay = {
-  day: string;
-  admissions: number;
-  seatsOffered: number;
-  screenings: number;
-  past: boolean;
-};
-
-export type Screening = {
-  film: string;
-  filmId: number;
-  cinema: string;
-  hall: string;
-  startsAt: string;
-  admissions: number;
-  capacity: number;
-};
-
-/** A film's standing on today alone, which is a different ranking from its run. */
-export type TodayFilm = {
+export type LiveFilm = {
   id: number;
   title: string;
-  admissions: number;
-  screenings: number;
-  seatsOffered: number;
-  occupancy: number;
-};
-
-/**
- * Today is the headline.
- *
- * A film's cumulative total barely moves hour to hour, so it makes a poor thing
- * to open on. What changed since this morning is the question a live tracker
- * is for, and everything cumulative sits below it.
- */
-export type Today = {
-  admissions: number;
-  seatsOffered: number;
-  occupancy: number;
-  screenings: number;
-  screeningsDone: number;
+  originalTitle: string | null;
+  today: PeriodFilm;
+  week: PeriodFilm & { byDay: Record<string, number> };
+  /** Official national run total, when the film has appeared in a top 20. */
+  official?: { admissions: number; gross: number; asOf: string; sinceAdmissions: number };
+  cinemas: number;
   sellouts: number;
-  gross: number;
-  filmmaker: number;
-  /** Tickets sold during each hour of today, for any screening day. */
-  ramp: { at: string; sold: number }[];
-  soldToday: number;
-  films: TodayFilm[];
-  fullest: Screening[];
-  /** The next few screenings that have not started yet. */
-  upcoming: Screening[];
+  presale: number;
+  chains: Record<string, { admissions: number; seatsOffered: number }>;
+  formats: Record<string, { admissions: number; seatsOffered: number }>;
+  topCinemas: { name: string; admissions: number; seatsOffered: number }[];
+  todayScreenings: Screening[];
+  /** Hourly measured sales, `YYYY-MM-DDTHH` → tickets. */
+  ramp: Record<string, number>;
+  rating?: Rating;
+  articles?: Article[];
 };
 
 export type Live = {
@@ -137,24 +142,17 @@ export type Live = {
   /** `YYYY-MM-DD` in Prague. */
   date: string;
   today: Today;
-  totals: {
-    week: number;
-    presale: number;
-    gross: number;
-    filmmaker: number;
-  };
-  days: LiveDay[];
+  week: Week;
+  allTime: AllTime;
   films: LiveFilm[];
-  ramp: { at: string; sold: number }[];
   coverage: { total: number; missed: number; partial: number };
-  /** The most recent published weekly ranking, if we have one. */
-  official?: OfficialWeek;
 };
 
-/** Admissions for a screening: frozen if it has run, live presale if not. */
-const admissionsOf = (s: Screening0) => s.settled?.sold ?? s.sold ?? 0;
-const capacityOf = (s: Screening0) => s.settled?.total ?? s.total ?? 0;
-const priceOf = (s: Screening0) => s.priceMin ?? CC_ESTIMATED_TICKET_PRICE_CZK;
+// --- helpers ---------------------------------------------------------------
+
+const admissionsOf = (s: Stored) => s.settled?.sold ?? s.sold ?? 0;
+const capacityOf = (s: Stored) => s.settled?.total ?? s.total ?? 0;
+const priceOf = (s: Stored) => s.priceMin ?? CC_ESTIMATED_TICKET_PRICE_CZK;
 
 const shiftDay = (iso: string, days: number) => {
   const d = new Date(`${iso}T12:00:00Z`);
@@ -162,104 +160,157 @@ const shiftDay = (iso: string, days: number) => {
   return d.toISOString().slice(0, 10);
 };
 
+/** Monday of the week a given day falls in. */
+export function startOfWeek(iso: string): string {
+  const d = new Date(`${iso}T12:00:00Z`);
+  const dow = d.getUTCDay();
+  return shiftDay(iso, dow === 0 ? -6 : 1 - dow);
+}
+
 const CHAIN_LABELS: Record<string, string> = {
   cinema_city: "Cinema City",
   cinestar: "CineStar",
 };
 
+const emptyPeriod = (id: number, title: string): PeriodFilm => ({
+  id,
+  title,
+  admissions: 0,
+  screenings: 0,
+  seatsOffered: 0,
+  occupancy: 0,
+});
+
+const finish = (p: PeriodFilm) => {
+  p.occupancy = p.seatsOffered > 0 ? p.admissions / p.seatsOffered : 0;
+  return p;
+};
+
+// --- main ------------------------------------------------------------------
+
 export function computeLive(state: State, history: History): Live {
   const today = pragueDate();
-  const from = shiftDay(today, -WINDOW_BACK);
-  const to = shiftDay(today, WINDOW_FORWARD);
+  const weekFrom = startOfWeek(today);
+  const weekTo = shiftDay(weekFrom, 6);
+  const now = Date.now();
 
-  const films = new Map<number, LiveFilm>();
-  const days = new Map<string, LiveDay>();
-  const cinemaTotals = new Map<number, Map<string, { admissions: number; seatsOffered: number }>>();
-
-  const filmMeta = (
-    id: number,
-  ): { title: string; originalTitle: string | null; rating?: Rating; articles?: Article[] } => {
+  const meta = (id: number) => {
     const known = state.films.find((f) => f.id === id);
-    if (known) {
-      return {
-        title: known.title,
-        originalTitle: known.originalTitle,
-        rating: known.rating,
-        articles: known.articles,
-      };
-    }
-    // A film folded into history keeps its name but loses its live context.
-    const fromHistory = history.films[String(id)];
-    return fromHistory ?? { title: `#${id}`, originalTitle: null };
+    if (known) return known;
+    const folded = history.films[String(id)];
+    return folded
+      ? { id, title: folded.title, originalTitle: folded.originalTitle }
+      : { id, title: `#${id}`, originalTitle: null };
   };
 
-  const ensureFilm = (id: number): LiveFilm => {
+  const films = new Map<number, LiveFilm>();
+  const ensure = (id: number): LiveFilm => {
     let f = films.get(id);
     if (!f) {
-      const meta = filmMeta(id);
+      const m = meta(id) as { title: string; originalTitle: string | null; rating?: Rating; articles?: Article[] };
       f = {
         id,
-        title: meta.title,
-        originalTitle: meta.originalTitle,
-        admissions: 0,
-        upcoming: 0,
-        screenings: 0,
-        seatsOffered: 0,
-        occupancy: 0,
-        gross: 0,
-        filmmaker: 0,
-        sellouts: 0,
+        title: m.title,
+        originalTitle: m.originalTitle,
+        today: emptyPeriod(id, m.title),
+        week: { ...emptyPeriod(id, m.title), byDay: {} },
         cinemas: 0,
-        perScreening: 0,
-        byDay: {},
+        sellouts: 0,
+        presale: 0,
         chains: {},
         formats: {},
         topCinemas: [],
+        todayScreenings: [],
         ramp: {},
-        rating: meta.rating,
-        articles: meta.articles,
+        rating: m.rating,
+        articles: m.articles,
       };
       films.set(id, f);
     }
     return f;
   };
 
-  const now = Date.now();
+  const describe = (s: Stored, title: string): Screening => ({
+    film: title,
+    filmId: s.filmId,
+    cinema: state.cinemas[state.halls[s.hallKey]?.cinemaKey ?? ""]?.name ?? "",
+    hall: state.halls[s.hallKey]?.name ?? "",
+    startsAt: s.startsAt,
+    admissions: admissionsOf(s),
+    capacity: capacityOf(s),
+  });
 
-  // --- live working set -----------------------------------------------------
+  // --- one pass over the working set ---------------------------------------
+  const todayAgg = { admissions: 0, seats: 0, screenings: 0, done: 0, sellouts: 0, gross: 0 };
+  const weekAgg = { admissions: 0, seats: 0, screenings: 0, gross: 0, presale: 0 };
+  const days = new Map<string, DayPoint>();
+  const cinemasPerFilm = new Map<number, Map<string, { admissions: number; seatsOffered: number }>>();
+  const todayScreenings: Screening[] = [];
+
   for (const s of Object.values(state.screenings)) {
-    if (s.day < from || s.day > to) continue;
+    const inWeek = s.day >= weekFrom && s.day <= weekTo;
+    const isToday = s.day === today;
+    if (!inWeek && !isToday) continue;
 
-    const admissions = admissionsOf(s);
+    const sold = admissionsOf(s);
     const capacity = capacityOf(s);
-    const f = ensureFilm(s.filmId);
+    const started = new Date(s.startsAt).getTime() <= now;
+    const f = ensure(s.filmId);
 
-    f.admissions += admissions;
-    f.screenings += 1;
-    f.seatsOffered += capacity;
-    f.gross += admissions * priceOf(s);
+    if (isToday) {
+      todayAgg.admissions += sold;
+      todayAgg.seats += capacity;
+      todayAgg.screenings += 1;
+      todayAgg.gross += sold * priceOf(s);
+      if (started) todayAgg.done += 1;
+      if (s.soldOut) todayAgg.sellouts += 1;
+
+      f.today.admissions += sold;
+      f.today.screenings += 1;
+      f.today.seatsOffered += capacity;
+
+      const described = describe(s, f.title);
+      todayScreenings.push(described);
+      f.todayScreenings.push(described);
+    }
+
+    if (!inWeek) continue;
+
+    weekAgg.admissions += sold;
+    weekAgg.seats += capacity;
+    weekAgg.screenings += 1;
+    weekAgg.gross += sold * priceOf(s);
+    if (!started) weekAgg.presale += sold;
+
+    f.week.admissions += sold;
+    f.week.screenings += 1;
+    f.week.seatsOffered += capacity;
+    f.week.byDay[s.day] = (f.week.byDay[s.day] ?? 0) + sold;
     if (s.soldOut) f.sellouts += 1;
-    if (new Date(s.startsAt).getTime() > now) f.upcoming += admissions;
-    f.byDay[s.day] = (f.byDay[s.day] ?? 0) + admissions;
+    if (!started) f.presale += sold;
 
-    const chainLabel = CHAIN_LABELS[s.chain] ?? s.chain;
-    const chain = (f.chains[chainLabel] ??= { admissions: 0, seatsOffered: 0 });
-    chain.admissions += admissions;
+    const chain = (f.chains[CHAIN_LABELS[s.chain] ?? s.chain] ??= {
+      admissions: 0,
+      seatsOffered: 0,
+    });
+    chain.admissions += sold;
     chain.seatsOffered += capacity;
 
-    const formatLabel = s.formats.length ? s.formats.join(" + ") : "2D";
-    const format = (f.formats[formatLabel] ??= { admissions: 0, seatsOffered: 0 });
-    format.admissions += admissions;
+    const format = (f.formats[s.formats.length ? s.formats.join(" + ") : "2D"] ??= {
+      admissions: 0,
+      seatsOffered: 0,
+    });
+    format.admissions += sold;
     format.seatsOffered += capacity;
 
     const cinemaName = state.cinemas[state.halls[s.hallKey]?.cinemaKey ?? ""]?.name;
     if (cinemaName) {
-      const perFilm = cinemaTotals.get(s.filmId) ?? new Map();
-      const entry = perFilm.get(cinemaName) ?? { admissions: 0, seatsOffered: 0 };
-      entry.admissions += admissions;
+      const per = cinemasPerFilm.get(s.filmId) ?? new Map();
+      const entry = per.get(cinemaName) ?? { admissions: 0, seatsOffered: 0 };
+      entry.admissions += sold;
       entry.seatsOffered += capacity;
-      perFilm.set(cinemaName, entry);
-      cinemaTotals.set(s.filmId, perFilm);
+      per.set(cinemaName, entry);
+      cinemasPerFilm.set(s.filmId, per);
     }
 
     const day = days.get(s.day) ?? {
@@ -269,47 +320,14 @@ export function computeLive(state: State, history: History): Live {
       screenings: 0,
       past: s.day < today,
     };
-    day.admissions += admissions;
+    day.admissions += sold;
     day.seatsOffered += capacity;
     day.screenings += 1;
     days.set(s.day, day);
   }
 
-  // --- folded history -------------------------------------------------------
-  for (const [day, d] of Object.entries(history.days)) {
-    if (day < from || day > to) continue;
-    for (const [id, t] of Object.entries(d.films)) {
-      const f = ensureFilm(Number(id));
-      f.admissions += t.sold;
-      f.screenings += t.screenings;
-      f.seatsOffered += t.capacity;
-      f.gross += t.gross;
-      f.byDay[day] = (f.byDay[day] ?? 0) + t.sold;
-    }
-    const totals = Object.values(d.films).reduce(
-      (acc, t) => {
-        acc.admissions += t.sold;
-        acc.seatsOffered += t.capacity;
-        acc.screenings += t.screenings;
-        return acc;
-      },
-      { admissions: 0, seatsOffered: 0, screenings: 0 },
-    );
-    const existing = days.get(day) ?? {
-      day,
-      admissions: 0,
-      seatsOffered: 0,
-      screenings: 0,
-      past: true,
-    };
-    existing.admissions += totals.admissions;
-    existing.seatsOffered += totals.seatsOffered;
-    existing.screenings += totals.screenings;
-    days.set(day, existing);
-  }
-
-  // --- ramp -----------------------------------------------------------------
-  const rampTotals: { at: string; sold: number }[] = [];
+  // --- ramp ----------------------------------------------------------------
+  const rampAll: { at: string; sold: number }[] = [];
   for (const bucket of state.ramp) {
     let total = 0;
     for (const [id, sold] of Object.entries(bucket.byFilm)) {
@@ -317,35 +335,20 @@ export function computeLive(state: State, history: History): Live {
       const f = films.get(Number(id));
       if (f) f.ramp[bucket.at] = sold;
     }
-    if (total > 0) rampTotals.push({ at: bucket.at, sold: total });
+    if (total > 0) rampAll.push({ at: bucket.at, sold: total });
   }
+  const todayRamp = rampAll.filter((b) => b.at.slice(0, 10) === today);
+  const weekRamp = rampAll.filter((b) => b.at.slice(0, 10) >= weekFrom);
 
-  // --- derived --------------------------------------------------------------
-  for (const f of films.values()) {
-    f.occupancy = f.seatsOffered > 0 ? f.admissions / f.seatsOffered : 0;
-    f.perScreening = f.screenings > 0 ? f.admissions / f.screenings : 0;
-    f.filmmaker = Math.round(f.gross * FILMMAKER_SHARE);
-    const perFilm = cinemaTotals.get(f.id);
-    f.cinemas = perFilm?.size ?? 0;
-    f.topCinemas = [...(perFilm?.entries() ?? [])]
-      .map(([name, v]) => ({ name, ...v }))
-      .sort((a, b) => b.admissions - a.admissions)
-      .slice(0, 10);
-  }
-
-  const dayList = [...days.values()].sort((a, b) => a.day.localeCompare(b.day));
-  const weekFrom = shiftDay(today, -6);
-
-  // --- official results own everything up to the last published weekend -----
+  // --- official ------------------------------------------------------------
   const officialTotals = latestTotals(history);
   for (const f of films.values()) {
     const official = officialTotals.get(f.id);
     if (!official) continue;
-    // Their report covers the weekend and everything before it; our scraping
-    // covers the days after. The Monday after the reported weekend is where
-    // one hands over to the other.
+    // Their report covers the weekend and everything before it; the Monday
+    // after is where our measurement takes over.
     const handover = shiftDay(official.weekendFrom, 4);
-    const since = Object.entries(f.byDay)
+    const since = Object.entries(f.week.byDay)
       .filter(([day]) => day >= handover)
       .reduce((sum, [, admissions]) => sum + admissions, 0);
     f.official = {
@@ -356,136 +359,93 @@ export function computeLive(state: State, history: History): Live {
     };
   }
 
-  const filmList = [...films.values()]
-    .filter((f) => f.admissions > 0)
-    // Rank on the best figure available for each film: the official run total
-    // plus what we have measured since, falling back to our own count.
-    .sort((a, b) => totalOf(b) - totalOf(a));
+  for (const f of films.values()) {
+    finish(f.today);
+    finish(f.week);
+    const per = cinemasPerFilm.get(f.id);
+    f.cinemas = per?.size ?? 0;
+    f.topCinemas = [...(per?.entries() ?? [])]
+      .map(([name, v]) => ({ name, ...v }))
+      .sort((a, b) => b.admissions - a.admissions)
+      .slice(0, 10);
+    f.todayScreenings.sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+  }
+
+  const weeks = Object.values(history.ufd ?? {})
+    .filter((w) => w.weekendFrom)
+    .sort((a, b) => a.weekendFrom.localeCompare(b.weekendFrom));
+  const lastWeek = weeks[weeks.length - 1];
+
+  const lastCompleteHour = todayRamp.length >= 2 ? todayRamp[todayRamp.length - 2].sold : 0;
 
   return {
     generatedAt: new Date().toISOString(),
     date: today,
-    today: computeToday(state, today, rampTotals, filmMeta),
-    totals: {
-      week: dayList
-        .filter((d) => d.day >= weekFrom && d.day <= today)
-        .reduce((s, d) => s + d.admissions, 0),
-      presale: dayList.filter((d) => d.day > today).reduce((s, d) => s + d.admissions, 0),
-      gross: filmList.reduce((s, f) => s + f.gross, 0),
-      filmmaker: filmList.reduce((s, f) => s + f.filmmaker, 0),
+    today: {
+      admissions: todayAgg.admissions,
+      seatsOffered: todayAgg.seats,
+      occupancy: todayAgg.seats > 0 ? todayAgg.admissions / todayAgg.seats : 0,
+      screenings: todayAgg.screenings,
+      screeningsDone: todayAgg.done,
+      sellouts: todayAgg.sellouts,
+      gross: todayAgg.gross,
+      filmmaker: Math.round(todayAgg.gross * FILMMAKER_SHARE),
+      ramp: todayRamp,
+      soldToday: todayRamp.reduce((s, b) => s + b.sold, 0),
+      soldLastHour: lastCompleteHour,
+      films: [...films.values()]
+        .map((f) => f.today)
+        .filter((f) => f.admissions > 0)
+        .sort((a, b) => b.admissions - a.admissions),
+      fullest: todayScreenings
+        .filter((s) => s.capacity >= 40)
+        .sort((a, b) => b.admissions / b.capacity - a.admissions / a.capacity)
+        .slice(0, 10),
+      upcoming: todayScreenings
+        .filter((s) => new Date(s.startsAt).getTime() > now)
+        .sort((a, b) => a.startsAt.localeCompare(b.startsAt))
+        .slice(0, 10),
     },
-    days: dayList,
-    films: filmList,
-    ramp: rampTotals,
+    week: {
+      from: weekFrom,
+      to: weekTo,
+      admissions: weekAgg.admissions,
+      seatsOffered: weekAgg.seats,
+      occupancy: weekAgg.seats > 0 ? weekAgg.admissions / weekAgg.seats : 0,
+      screenings: weekAgg.screenings,
+      gross: weekAgg.gross,
+      filmmaker: Math.round(weekAgg.gross * FILMMAKER_SHARE),
+      presale: weekAgg.presale,
+      // Always the full Monday-to-Sunday span. Showing only the days we have
+      // data for would silently redraw the axis as the week fills in, and hide
+      // that the early days were never measured.
+      days: Array.from({ length: 7 }, (_, i) => {
+        const day = shiftDay(weekFrom, i);
+        return (
+          days.get(day) ?? {
+            day,
+            admissions: 0,
+            seatsOffered: 0,
+            screenings: 0,
+            past: day < today,
+          }
+        );
+      }),
+      films: [...films.values()]
+        .map((f) => f.week)
+        .filter((f) => f.admissions > 0)
+        .sort((a, b) => b.admissions - a.admissions),
+      ramp: weekRamp,
+    },
+    allTime: {
+      weekendFrom: lastWeek?.weekendFrom,
+      weekendTotal: lastWeek?.entries.reduce((s, e) => s + e.weekendAdmissions, 0) ?? 0,
+      weekend: lastWeek?.entries ?? [],
+      ranking: allTimeRanking(history, 100),
+      weeksStored: weeks.length,
+      archiveFrom: weeks[0]?.weekendFrom,
+    },
+    films: [...films.values()].sort((a, b) => b.week.admissions - a.week.admissions),
     coverage: recentCoverage(state, history, 7),
-    official: latestOfficialWeek(history),
-  };
-}
-
-/** Best available run total: official plus what we have measured since. */
-export const totalOf = (f: LiveFilm): number =>
-  f.official ? f.official.admissions + f.official.sinceAdmissions : f.admissions;
-
-function latestOfficialWeek(history: History): OfficialWeek | undefined {
-  const weeks = Object.values(history.ufd ?? {})
-    .filter((w) => w.weekendFrom)
-    .sort((a, b) => a.weekendFrom.localeCompare(b.weekendFrom));
-  const latest = weeks[weeks.length - 1];
-  if (!latest) return undefined;
-
-  return {
-    weekendFrom: latest.weekendFrom,
-    entries: latest.entries,
-    totalAdmissions: latest.entries.reduce((s, e) => s + e.weekendAdmissions, 0),
-  };
-}
-
-function describe(state: State, s: Screening0, title: string): Screening {
-  return {
-    film: title,
-    filmId: s.filmId,
-    cinema: state.cinemas[state.halls[s.hallKey]?.cinemaKey ?? ""]?.name ?? "",
-    hall: state.halls[s.hallKey]?.name ?? "",
-    startsAt: s.startsAt,
-    admissions: admissionsOf(s),
-    capacity: capacityOf(s),
-  };
-}
-
-function computeToday(
-  state: State,
-  today: string,
-  ramp: { at: string; sold: number }[],
-  meta: (id: number) => { title: string },
-): Today {
-  const now = Date.now();
-  const screenings = Object.values(state.screenings).filter((s) => s.day === today);
-
-  const perFilm = new Map<number, TodayFilm>();
-  let admissions = 0;
-  let seatsOffered = 0;
-  let sellouts = 0;
-  let done = 0;
-  let gross = 0;
-
-  for (const s of screenings) {
-    const sold = admissionsOf(s);
-    const capacity = capacityOf(s);
-    admissions += sold;
-    seatsOffered += capacity;
-    gross += sold * priceOf(s);
-    if (s.soldOut) sellouts += 1;
-    if (new Date(s.startsAt).getTime() <= now) done += 1;
-
-    const f = perFilm.get(s.filmId) ?? {
-      id: s.filmId,
-      title: meta(s.filmId).title,
-      admissions: 0,
-      screenings: 0,
-      seatsOffered: 0,
-      occupancy: 0,
-    };
-    f.admissions += sold;
-    f.screenings += 1;
-    f.seatsOffered += capacity;
-    perFilm.set(s.filmId, f);
-  }
-
-  for (const f of perFilm.values()) {
-    f.occupancy = f.seatsOffered > 0 ? f.admissions / f.seatsOffered : 0;
-  }
-
-  // Sales made today, whichever day they are for — this is the "what is
-  // happening right now" trend, not a breakdown of today's screenings.
-  const todayHours = ramp.filter((b) => b.at.slice(0, 10) === today);
-
-  const withCapacity = screenings.filter((s) => capacityOf(s) >= 40);
-
-  return {
-    admissions,
-    seatsOffered,
-    occupancy: seatsOffered > 0 ? admissions / seatsOffered : 0,
-    screenings: screenings.length,
-    screeningsDone: done,
-    sellouts,
-    gross,
-    filmmaker: Math.round(gross * FILMMAKER_SHARE),
-    ramp: todayHours,
-    soldToday: todayHours.reduce((s, b) => s + b.sold, 0),
-    // Capped so the today section stays scannable on a phone; the complete
-    // list is right below it under the cumulative view.
-    films: [...perFilm.values()]
-      .filter((f) => f.admissions > 0)
-      .sort((a, b) => b.admissions - a.admissions)
-      .slice(0, 10),
-    fullest: withCapacity
-      .map((s) => describe(state, s, meta(s.filmId).title))
-      .sort((a, b) => b.admissions / b.capacity - a.admissions / a.capacity)
-      .slice(0, 8),
-    upcoming: screenings
-      .filter((s) => new Date(s.startsAt).getTime() > now)
-      .sort((a, b) => a.startsAt.localeCompare(b.startsAt))
-      .map((s) => describe(state, s, meta(s.filmId).title))
-      .slice(0, 8),
   };
 }
