@@ -150,14 +150,102 @@ export function parseWeek(sheet: Cell[][], fallback: { year: number; week: numbe
   };
 }
 
+// ---------------------------------------------------------------------------
+// Annual top 50
+// ---------------------------------------------------------------------------
+
+/**
+ * UFD also publishes a top 50 for each finished year, and those files carry a
+ * second block of columns headed "Hodnoty od premiéry" — the film's totals for
+ * its whole life, not just the calendar year.
+ *
+ * That matters because the weekly tables only ever show the top 20. A film that
+ * slips out of the ranking while still playing simply stops being reported, so
+ * the largest weekly figure understates its real run — measured against the
+ * 2024 annual list, by up to 14% for mid-table films. The annual files close
+ * that gap and reach back to 2017, further than the weeklies we hold.
+ */
+const ANNUAL_INDEX = `${BASE}/prehledy-statistiky/top-50-rocni-vysledky`;
+
+export type UfdAnnualRow = {
+  rank: number;
+  title: string;
+  originalTitle: string;
+  distributor: string;
+  country: string;
+  /** `YYYY-MM-DD`, converted from the sheet's serial date. */
+  premiere: string | null;
+  screenings: number;
+  admissions: number;
+  gross: number;
+};
+
+export type UfdAnnual = { year: number; rows: UfdAnnualRow[] };
+
+export function parseAnnualFileName(url: string): number | null {
+  const m = url.match(/top50(\d{4})\.xlsx?$/i);
+  return m ? Number(m[1]) : null;
+}
+
+export async function fetchAnnualFileUrls(): Promise<string[]> {
+  const html = await fetchText(ANNUAL_INDEX, { timeoutMs: 25_000 });
+  return [...new Set(html.match(/https?:\/\/[^"']*top50\d{4}\.xlsx?/gi) ?? [])];
+}
+
+/** Excel stores dates as days since 1899-12-30. */
+function excelDate(value: Cell): string | null {
+  if (typeof value !== "number" || value < 20000 || value > 60000) return null;
+  return new Date(Date.UTC(1899, 11, 30) + value * 86_400_000).toISOString().slice(0, 10);
+}
+
+export function parseAnnual(sheet: Cell[][], year: number): UfdAnnual {
+  const headerRow = sheet.findIndex((r) => text(r[0]) === "Poř." && text(r[1]) === "Titul");
+  if (headerRow < 0) throw new Error("UFD annual sheet has no recognisable header row");
+
+  // The lifetime block starts at the column the "Hodnoty od premiéry" caption
+  // sits above; falling back to the fixed layout would silently read the
+  // calendar-year figures instead, which is the whole thing we are avoiding.
+  const captionRow = sheet.slice(0, headerRow).find((r) => r.some((c) => /od prem/i.test(text(c))));
+  const lifetimeAt = captionRow?.findIndex((c) => /od prem/i.test(text(c))) ?? -1;
+  if (lifetimeAt < 0) throw new Error("UFD annual sheet has no lifetime columns");
+
+  const rows: UfdAnnualRow[] = [];
+  for (const line of sheet.slice(headerRow + 1)) {
+    const rank = number(line[0]);
+    const title = text(line[1]);
+    if (!rank || !title) continue;
+    rows.push({
+      rank,
+      title,
+      originalTitle: text(line[2]),
+      distributor: text(line[3]),
+      country: text(line[6]),
+      premiere: excelDate(line[5]),
+      screenings: number(line[lifetimeAt]),
+      admissions: number(line[lifetimeAt + 1]),
+      gross: number(line[lifetimeAt + 2]),
+    });
+  }
+  return { year, rows };
+}
+
+export async function fetchAnnual(fileUrl: string): Promise<UfdAnnual> {
+  const year = parseAnnualFileName(fileUrl);
+  if (!year) throw new Error(`unrecognised UFD annual file name: ${fileUrl}`);
+  return parseAnnual(readXls(await download(fileUrl)), year);
+}
+
+async function download(url: string): Promise<Uint8Array> {
+  const res = await fetch(url, {
+    headers: { "user-agent": process.env.SCRAPER_CONTACT ?? "CineScrapeBot/0.1" },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
 export async function fetchWeek(fileUrl: string): Promise<UfdWeek> {
   const named = parseFileName(fileUrl);
   if (!named) throw new Error(`unrecognised UFD file name: ${fileUrl}`);
 
-  const res = await fetch(fileUrl, {
-    headers: { "user-agent": process.env.SCRAPER_CONTACT ?? "CineScrapeBot/0.1" },
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${fileUrl}`);
-  const bytes = new Uint8Array(await res.arrayBuffer());
-  return parseWeek(readXls(bytes), named);
+  return parseWeek(readXls(await download(fileUrl)), named);
 }

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { readXls } from "@/lib/xls";
 
-import { parseFileName, parseWeek } from "./ufd";
+import { parseAnnual, parseAnnualFileName, parseFileName, parseWeek } from "./ufd";
 
 const sheet = readXls(
   readFileSync(fileURLToPath(new URL("./__fixtures__/ufd-top20-2026-30.xls", import.meta.url))),
@@ -76,5 +76,51 @@ describe("parseWeek", () => {
     expect(() => parseWeek([[null, null, "něco jiného"]], { year: 2026, week: 1 })).toThrow(
       /header/,
     );
+  });
+});
+
+const annualSheet = readXls(
+  readFileSync(fileURLToPath(new URL("./__fixtures__/ufd-top50-2024.xls", import.meta.url))),
+);
+
+describe("parseAnnual", () => {
+  const annual = parseAnnual(annualSheet, 2024);
+
+  it("reads the whole top 50", () => {
+    expect(annual.rows).toHaveLength(50);
+    expect(annual.year).toBe(2024);
+  });
+
+  it("reads lifetime totals, not the calendar year", () => {
+    // Aristokratka premiered in 2023, so its run reaches past what 2024 alone
+    // shows: 305 232 in the year, 309 277 since release. Reading the wrong
+    // column here is exactly the undercount these files exist to fix.
+    const aristokratka = annual.rows.find((r) => r.title.startsWith("Aristokratka"))!;
+    expect(aristokratka.admissions).toBe(309277);
+    expect(aristokratka.screenings).toBe(8083);
+  });
+
+  it("reads the headline films", () => {
+    expect(annual.rows[0]).toMatchObject({ rank: 1, title: "Vlny", admissions: 885767 });
+    expect(annual.rows[1].originalTitle).toBe("Inside Out 2");
+  });
+
+  it("converts the premiere from its serial date", () => {
+    expect(annual.rows[0].premiere).toBe("2024-08-15");
+    expect(annual.rows[1].premiere).toBe("2024-07-18");
+  });
+
+  it("refuses a sheet without the lifetime block", () => {
+    const stripped = annualSheet.map((row) =>
+      row.map((c) => (typeof c === "string" && /od prem/i.test(c) ? null : c)),
+    );
+    expect(() => parseAnnual(stripped, 2024)).toThrow(/lifetime/);
+  });
+});
+
+describe("parseAnnualFileName", () => {
+  it("reads the year", () => {
+    expect(parseAnnualFileName("https://www.ufd.cz/files/article/1516/top502024.xls")).toBe(2024);
+    expect(parseAnnualFileName("top20-2026-30cz.xls")).toBeNull();
   });
 });

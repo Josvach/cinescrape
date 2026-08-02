@@ -14,9 +14,12 @@ import { filmIdentity } from "@/core/match";
 import { rateLimited } from "@/lib/http";
 import { pragueDate } from "@/lib/time";
 import {
+  fetchAnnual,
+  fetchAnnualFileUrls,
   fetchArticleUrls,
   fetchWeek,
   fetchWeekFileUrls,
+  parseAnnualFileName,
   parseFileName,
   type UfdWeek,
 } from "@/sources/ufd";
@@ -63,6 +66,7 @@ export type UfdIngestResult = {
   filesSeen: number;
   weeksAdded: number;
   weeksKnown: number;
+  annualYears: number;
   matched: number;
   unmatched: string[];
   errors: string[];
@@ -82,6 +86,7 @@ export async function ingestUfd(
     filesSeen: 0,
     weeksAdded: 0,
     weeksKnown: 0,
+    annualYears: 0,
     matched: 0,
     unmatched: [],
     errors: [],
@@ -148,6 +153,49 @@ export async function ingestUfd(
       onError: (file, err) => result.errors.push(`file ${file}: ${String(err)}`),
     },
   );
+
+  // The annual lists close the gap the top-20 weeklies leave, so they are not
+  // optional extras — a history without them undercounts every film that
+  // dropped out of the ranking mid-run. A finished year's file never changes,
+  // so only the years we are missing are downloaded; in steady state this is
+  // one index page and nothing else.
+  {
+    history.ufdAnnual ??= {};
+    try {
+      const files = await fetchAnnualFileUrls();
+      const missing = files.filter((f) => {
+        const year = parseAnnualFileName(f);
+        return year !== null && !history.ufdAnnual![String(year)];
+      });
+      await rateLimited(
+        missing,
+        async (file) => {
+          const annual = await fetchAnnual(file);
+          history.ufdAnnual![String(annual.year)] = {
+            year: annual.year,
+            entries: annual.rows.map((r) => ({
+              rank: r.rank,
+              title: r.title,
+              originalTitle: r.originalTitle,
+              distributor: r.distributor,
+              premiere: r.premiere,
+              admissions: r.admissions,
+              gross: r.gross,
+              screenings: r.screenings,
+            })),
+          };
+          result.annualYears += 1;
+        },
+        {
+          minIntervalMs: 400,
+          deadline: opts.deadline,
+          onError: (file, err) => result.errors.push(`annual ${file}: ${String(err)}`),
+        },
+      );
+    } catch (err) {
+      result.errors.push(`annual index: ${String(err)}`);
+    }
+  }
 
   result.weeksKnown = Object.keys(history.ufd).length;
   if (result.errors.length === 0) history.ufdCheckedAt = new Date().toISOString();
@@ -298,6 +346,32 @@ export function allTimeRanking(history: History, limit = 100): AllTimeEntry[] {
       current.admissions = Math.max(current.admissions, e.totalAdmissions);
       current.gross = Math.max(current.gross, e.totalGross);
       current.lastSeen = week.weekendFrom;
+    }
+  }
+
+  // The annual lists are authoritative where they overlap: a weekly figure is
+  // only ever the film's total on the day it was still inside the top 20, while
+  // the annual file reports the finished run. They also reach back further than
+  // the weeklies we hold, so titles missing above get added here.
+  for (const year of Object.values(history.ufdAnnual ?? {})) {
+    for (const e of year.entries) {
+      const key = e.title.trim().toLowerCase();
+      const current = byTitle.get(key);
+      const premiereYear = e.premiere ? Number(e.premiere.slice(0, 4)) : year.year;
+      if (!current) {
+        byTitle.set(key, {
+          title: e.title.trim(),
+          admissions: e.admissions,
+          gross: e.gross,
+          lastSeen: e.premiere ?? `${year.year}-12-31`,
+          year: premiereYear,
+        });
+        continue;
+      }
+      current.admissions = Math.max(current.admissions, e.admissions);
+      current.gross = Math.max(current.gross, e.gross);
+      // A premiere date beats a guess made from the first weekend we saw.
+      if (e.premiere) current.year = premiereYear;
     }
   }
 

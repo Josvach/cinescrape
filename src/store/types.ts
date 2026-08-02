@@ -176,9 +176,32 @@ export type History = {
    * scraping covers the days since.
    */
   ufd?: Record<string, UfdWeekRecord>;
+  /**
+   * UFD's annual top 50, keyed by year.
+   *
+   * The weekly tables only show a top 20, so a film that slips out of the
+   * ranking while still playing stops being reported and its largest weekly
+   * figure understates the run. The annual files carry lifetime totals for the
+   * top 50 of each year and close that gap.
+   */
+  ufdAnnual?: Record<string, UfdAnnualRecord>;
   /** ISO instant of the last successful UFD refresh. */
   ufdCheckedAt?: string;
 };
+
+export type UfdAnnualEntry = {
+  rank: number;
+  title: string;
+  originalTitle: string;
+  distributor: string;
+  premiere: string | null;
+  /** Totals for the film's whole life, not just that calendar year. */
+  admissions: number;
+  gross: number;
+  screenings: number;
+};
+
+export type UfdAnnualRecord = { year: number; entries: UfdAnnualEntry[] };
 
 export function emptyState(): State {
   return {
