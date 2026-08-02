@@ -12,6 +12,7 @@
 
 import { filmIdentity } from "@/core/match";
 import { rateLimited } from "@/lib/http";
+import { pragueDate } from "@/lib/time";
 import {
   fetchArticleUrls,
   fetchWeek,
@@ -21,8 +22,38 @@ import {
 } from "@/sources/ufd";
 import type { History, State, UfdEntry } from "@/store/types";
 
-/** How often to look for a new weekly report once the backfill is done. */
+/** How often to look for a new weekly report when we are already up to date. */
 const REFRESH_AFTER_HOURS = 12;
+
+/**
+ * How often to look while a report we expect is still missing.
+ *
+ * UFD publishes on Monday, usually late morning. Waiting half a day to notice
+ * would mean the weekend's official numbers sit unseen for most of the day they
+ * arrive, so once a weekend has passed without a report the check runs on
+ * almost every iteration. It costs one index page and one article fetch.
+ */
+const WAITING_INTERVAL_MINUTES = 10;
+
+/**
+ * The weekend UFD should have published by now, as `YYYY-MM-DD`.
+ *
+ * Their weekends run Thursday to Sunday, so the most recently completed one
+ * opened three days before the last Sunday that has fully passed.
+ */
+export function expectedLatestWeekend(now: Date = new Date()): string {
+  const d = new Date(`${pragueDate(now)}T12:00:00Z`);
+  const dayOfWeek = d.getUTCDay();
+  // On Sunday itself the weekend is still running, so go back a full week.
+  d.setUTCDate(d.getUTCDate() - (dayOfWeek === 0 ? 7 : dayOfWeek) - 3);
+  return d.toISOString().slice(0, 10);
+}
+
+/** True when a weekend has finished but its report has not appeared yet. */
+export function isAwaitingReport(history: History, now: Date = new Date()): boolean {
+  const have = latestWeekendFrom(history);
+  return !have || have < expectedLatestWeekend(now);
+}
 
 export const weekKey = (year: number, week: number) =>
   `${year}-W${String(week).padStart(2, "0")}`;
@@ -58,9 +89,13 @@ export async function ingestUfd(
 
   history.ufd ??= {};
 
+  // Poll hard while a report is due, then back off once it has landed.
+  const intervalMs = isAwaitingReport(history)
+    ? WAITING_INTERVAL_MINUTES * 60_000
+    : REFRESH_AFTER_HOURS * 60 * 60 * 1000;
   const fresh =
     history.ufdCheckedAt &&
-    Date.now() - new Date(history.ufdCheckedAt).getTime() < REFRESH_AFTER_HOURS * 60 * 60 * 1000;
+    Date.now() - new Date(history.ufdCheckedAt).getTime() < intervalMs;
   if (!opts.backfill && fresh) {
     result.weeksKnown = Object.keys(history.ufd).length;
     return result;
