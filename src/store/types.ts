@@ -14,7 +14,7 @@
  *   live.json     precomputed answers for the dashboard. Derived; disposable.
  */
 
-export type Chain = "cinema_city" | "cinestar";
+export type Chain = "cinema_city" | "cinestar" | "golden_apple";
 
 /** `chain:externalId` — stable across runs, unlike an autoincrement id. */
 export type Key = string;

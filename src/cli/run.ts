@@ -19,6 +19,7 @@
 import { ingestCinemaCity } from "@/ingest/cinemacity";
 import { refreshFilmContext } from "@/ingest/context";
 import { discoverCineStarSchedule, pollCineStarHalls } from "@/ingest/cinestar";
+import { ingestGoldenApple } from "@/ingest/goldenapple";
 import { settleScreenings } from "@/ingest/settle";
 import { ingestUfd } from "@/ingest/ufd";
 import { computeLive } from "@/stats/compute";
@@ -153,6 +154,17 @@ async function once(withDiscovery: boolean) {
     errors.push(...poll.errors);
   } catch (err) {
     errors.push(`cinestar-halls: ${String(err)}`);
+  }
+
+  // Golden Apple is small enough that its whole schedule and queue fit in the
+  // slack after CineStar, and its programme page carries the titles, so it has
+  // no separate discovery step.
+  try {
+    const ga = await ingestGoldenApple(state, { deadline: startedAt + budgetMs * 1.1 });
+    report.goldenApple = { ...ga, errors: ga.errors.length };
+    errors.push(...ga.errors);
+  } catch (err) {
+    errors.push(`goldenapple: ${String(err)}`);
   }
 
   report.settle = settleScreenings(state, history);

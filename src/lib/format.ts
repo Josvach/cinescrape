@@ -33,6 +33,7 @@ export const timeLabel = (iso: string) => timeFmt.format(new Date(iso));
 export const CHAIN_LABELS: Record<string, string> = {
   cinema_city: "Cinema City",
   cinestar: "CineStar",
+  golden_apple: "Golden Apple",
 };
 
 /** Shifts a `YYYY-MM-DD` day by whole days without tripping over DST. */

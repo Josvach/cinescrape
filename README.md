@@ -1,7 +1,8 @@
 # CineScrape
 
 Živá návštěvnost filmů v českých multikinech. Sbírá obsazenost jednotlivých
-projekcí z Cinema City a CineStar a ukazuje, jak filmu nabíhá návštěvnost —
+projekcí z Cinema City, CineStaru a Golden Apple a ukazuje, jak filmu nabíhá
+návštěvnost —
 v reálném čase, ne s týdenním zpožděním jako oficiální data UFD.
 
 **Žádný server, žádná databáze, žádný účet navíc.** Scraper běží v GitHub
@@ -10,7 +11,7 @@ GitHub Pages. Na telefonu se dá dát „Přidat na plochu" a chová se jako app
 
 ## Co to umí
 
-- **Živá celková návštěvnost filmu** napříč oběma sítěmi
+- **Živá celková návštěvnost filmu** napříč všemi sledovanými sítěmi
 - **Návštěvnost po dnech projekce** — lístek prodaný dnes na zítřek se počítá
   k zítřku, takže pravá část grafu je předprodej, ne odhad
 - **Křivka nabíhání prodeje** ve stylu Social Blade
@@ -45,13 +46,13 @@ npm test
 
 ## Odkud data pocházejí
 
-| | Cinema City | CineStar |
-|---|---|---|
-| Kin | 13 | 12 |
-| Rozvrh | `GET tickets.cinemacity.cz/api/presentations/` — celá síť jedním anonymním requestem, ~30 dní dopředu | SSR payload `cinestar.cz/cz/<kino>/program`, 12 stránek |
-| Obsazenost | `availRatio` × kapacita sálu | `POST api.cinestar.cz/api/hall/get` — plán sálu sedadlo po sedadle |
-| Kapacita | `GET /api/seats/seatplan` (načte se jednou) | délka pole `seats` |
-| Ceny | nezveřejňuje → odhad | reálný ceník projekce |
+| | Cinema City | CineStar | Golden Apple |
+|---|---|---|---|
+| Kin | 13 | 12 | 2 (Zlín) |
+| Rozvrh | `GET tickets.cinemacity.cz/api/presentations/` — celá síť jedním anonymním requestem, ~30 dní dopředu | SSR payload `cinestar.cz/cz/<kino>/program`, 12 stránek | homepage gacinema.cz — 4 dny programu naráz |
+| Obsazenost | `availRatio` × kapacita sálu | `POST api.cinestar.cz/api/hall/get` — plán sálu sedadlo po sedadle | `POST /umbraco/Surface/ticketinglocal/GetSeating` — SVG plán sálu |
+| Kapacita | `GET /api/seats/seatplan` (načte se jednou) | délka pole `seats` | počet `<g class="seat-item">` |
+| Ceny | nezveřejňuje → odhad | reálný ceník projekce | cena v `data-tooltip` volného sedadla |
 
 Cinema City udává `availRatio` jako desetinné číslo. Ověřeno na všech 3 401
 projekcích ve 122 sálech: `availRatio × kapacita` vychází na celá čísla, takže
@@ -59,10 +60,29 @@ z něj jde odvodit **přesný počet prodaných sedadel**, ne odhad.
 
 ### Co to nepokrývá
 
-Obě sítě dohromady dělají zhruba **55 % návštěvnosti českých kin**. Zbytek jsou
-stovky jednosálových kin bez společného rezervačního systému, která obsazenost
-nezveřejňují. Tenhle projekt tedy **není** náhrada celostátních čísel UFD a
-dashboard to říká nahlas.
+Sledované sítě dohromady dělají zhruba **55 % návštěvnosti českých kin**. Zbytek
+jsou stovky jednosálových kin bez společného rezervačního systému, která
+obsazenost nezveřejňují. Tenhle projekt tedy **není** náhrada celostátních čísel
+UFD a dashboard to říká nahlas.
+
+### Premiere Cinemas a CINEMAX — proč tam nejsou
+
+Obě sítě jsou technicky dosažitelné, ale obě si automatický přístup k prodejní
+části výslovně zakazují v robots.txt, takže je nescrapujeme:
+
+- **Premiere Cinemas** (4 česká multikina — Praha Hostivař, Olomouc, Teplice,
+  Karlovy Vary). `robots.txt`: `User-agent: * / Disallow: /vstupenky/`. Plán
+  sálu vrací `POST /ajax.php?c=PCRezervace&m=seatPlan` s `ci` a `mi`, ověřeno
+  že funguje — jenže je to datový endpoint právě těch zakázaných stránek.
+  Obejít to jinou URL by bylo obcházení, ne výjimka.
+- **CINEMAX** má v ČR jediné kino (Olomouc Olympia, `kino` uid 15; zbytek sítě
+  je slovenský a ten záměrně nechceme). Program se dá vytáhnout z
+  `POST /main-ajax`, ale prodej běží na `prodej.cine-max.cz`, kde je
+  `User-agent: * / Disallow: /` — tedy zákaz úplně všeho.
+
+Kdyby to někdy mělo být jinak, správná cesta je se jich zeptat; z takového
+nástroje mají hodnotu i ony. Golden Apple naproti tomu robots.txt nemá, takže
+tam nic zakázané není.
 
 ## Jak to funguje
 
@@ -159,15 +179,17 @@ npm run typecheck
 
 Fixtures v `src/sources/__fixtures__/` jsou uložené reálné odpovědi, takže testy
 neběží proti živému API. Klíčové testy hlídají převod `availRatio` → prodaná
-sedadla, počítání `OCCUPIED` u CineStar, párování filmů napříč sítěmi, delta
+sedadla, počítání `OCCUPIED` u CineStar a `occupied` u Golden Apple, párování
+filmů napříč sítěmi, delta
 logiku rampy a časovou zónu včetně přechodů na letní čas.
 
 ## Slušné chování a právní stránka
 
-- **robots.txt obojí povoluje.** CineStar má `User-agent: * / Disallow:` a
-  blokuje jmenovitě jen AI crawlery; `tickets.cinemacity.cz` robots.txt nemá.
-  To ale **není** souhlas se scrapingem — před delším provozem projdi VOP
-  obou sítí.
+- **robots.txt sledované sítě povolují.** CineStar má `User-agent: * / Disallow:`
+  a blokuje jmenovitě jen AI crawlery; `tickets.cinemacity.cz` a `gacinema.cz`
+  robots.txt nemají vůbec. To ale **není** souhlas se scrapingem — před delším
+  provozem projdi VOP. Kde robots.txt scraping zakazuje, tam nelezeme; viz
+  Premiere Cinemas a CINEMAX výš.
 - **Sui generis právo k databázi** (§ 88 AZ) chrání jejich programovou databázi.
   Pro soukromý nástroj je to jiná situace než pro veřejnou publikaci, ale kdyby
   se z toho někdy stala veřejná služba, publikuj **odvozenou analytiku**, ne
