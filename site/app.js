@@ -15,6 +15,17 @@
  * under the reader.
  */
 
+/**
+ * Shown top right on every screen.
+ *
+ * Bumped by hand when something visible changes, which is the point: it is
+ * there so a screenshot or a "u mě to vypadá jinak" can be pinned to a
+ * specific build. Kept apart from package.json's semver — that number tracks
+ * the code's shape (dropping Postgres took it to 2.0.0), this one tracks what
+ * the phone is looking at.
+ */
+export const VERSION = "Alpha 0.07";
+
 const CZ = "cs-CZ";
 const nf = new Intl.NumberFormat(CZ);
 const num = (v) => nf.format(Math.round(v || 0));
@@ -603,7 +614,9 @@ function render() {
       state.view === "film"
         ? el("button", { class: "back", onclick: () => go({ view: "home", filmId: null }) }, "‹ Zpět")
         : el("span", { class: "brand" }, "CineScrape"),
-      el("span", { class: "stamp" }, "aktualizováno ", clockLabel(LIVE.generatedAt))),
+      el("div", { class: "meta" },
+        el("span", { class: "version" }, VERSION),
+        el("span", { class: "stamp" }, "aktualizováno ", clockLabel(LIVE.generatedAt)))),
     body,
   );
 

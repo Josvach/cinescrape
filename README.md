@@ -173,15 +173,15 @@ sbírá se historie i když je telefon vypnutý, což lokální soubor nikdy neu
 ## Testy
 
 ```bash
-npm test        # 79 testů, fixtures ze skutečných odpovědí obou API
+npm test        # 139 testů, fixtures ze skutečných odpovědí všech API
 npm run typecheck
 ```
 
 Fixtures v `src/sources/__fixtures__/` jsou uložené reálné odpovědi, takže testy
 neběží proti živému API. Klíčové testy hlídají převod `availRatio` → prodaná
 sedadla, počítání `OCCUPIED` u CineStar a `occupied` u Golden Apple, párování
-filmů napříč sítěmi, delta
-logiku rampy a časovou zónu včetně přechodů na letní čas.
+filmů napříč sítěmi, delta logiku rampy a časovou zónu včetně přechodů na letní
+čas.
 
 ## Slušné chování a právní stránka
 
@@ -213,6 +213,20 @@ logiku rampy a časovou zónu včetně přechodů na letní čas.
 - Sběr běží ~50 minut z každé hodiny, takže mezi 50. a 60. minutou je krátká
   mezera. Na veřejném repu jsou minuty zdarma neomezené, ale runner je po tu
   dobu obsazený.
+
+## Verze
+
+Aktuální verze je vidět vpravo nahoře na stránce, nad časem poslední
+aktualizace. Bumpuje se ručně v `site/app.js`:
+
+```js
+export const VERSION = "Alpha 0.07";
+```
+
+Je to jiné číslo než `version` v `package.json` — to sleduje tvar kódu
+(vyhození Postgresu ho posunulo na 2.0.0), tohle sleduje, na co se dívá telefon.
+Díky němu jde screenshot nebo „u mě to vypadá jinak" přiřadit ke konkrétnímu
+buildu.
 
 ## Předchozí verze
 

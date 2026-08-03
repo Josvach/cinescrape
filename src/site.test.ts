@@ -46,4 +46,13 @@ describe("site/index.html", () => {
   it("stays out of search indexes", () => {
     expect(html).toMatch(/name="robots"\s+content="noindex/);
   });
+
+  it("shows a build version, and styles it", () => {
+    // The version exists so a screenshot can be pinned to a build; one that is
+    // declared but never rendered, or rendered with no rule behind it, would
+    // quietly stop doing that.
+    expect(script).toMatch(/const VERSION = "[^"]+"/);
+    expect(script).toContain('class: "version"');
+    expect(html).toContain(".topbar .version");
+  });
 });
