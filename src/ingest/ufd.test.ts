@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { emptyHistory } from "@/store/types";
 
-import { allTimeRanking, expectedLatestWeekend, isAwaitingReport, latestTotals, weekKey } from "./ufd";
+import {
+  allTimeRanking,
+  byWeekDescending,
+  expectedLatestWeekend,
+  isAwaitingReport,
+  latestTotals,
+  weekKey,
+} from "./ufd";
 
 const at = (iso: string) => new Date(`${iso}T10:00:00Z`);
 
@@ -48,6 +55,26 @@ describe("isAwaitingReport", () => {
 
   it("waits when there is nothing at all", () => {
     expect(isAwaitingReport(emptyHistory(), at("2026-08-03"))).toBe(true);
+  });
+});
+
+describe("byWeekDescending", () => {
+  it("orders by the week number, not by the file name", () => {
+    // The week is not zero-padded, so a string sort reads week 9 as newer than
+    // week 30 — on the Monday a report is due that fetches March instead of
+    // this weekend.
+    const files = ["top20-2026-9cz.xls", "top20-2026-30cz.xls", "top20-2026-28cz.xls"];
+    expect([...files].sort(byWeekDescending)).toEqual([
+      "top20-2026-30cz.xls",
+      "top20-2026-28cz.xls",
+      "top20-2026-9cz.xls",
+    ]);
+  });
+
+  it("puts a newer year ahead of a higher week number", () => {
+    expect(["top20-2025-52cz.xls", "top20-2026-1cz.xls"].sort(byWeekDescending)[0]).toBe(
+      "top20-2026-1cz.xls",
+    );
   });
 });
 

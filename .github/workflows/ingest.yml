@@ -13,11 +13,19 @@ name: ingest
 # on the scheduler. An hourly trigger is fired reliably, and the job holds the
 # runner and does the pacing itself.
 #
+# The hourly trigger is not reliable either, only better. Measured over the
+# 38 runs before this was written: gaps of one to four hours, and on a Monday
+# morning nothing between 08:33 and 11:06 — the window the weekend's official
+# numbers land in. So there are two schedules half an hour apart. They cannot
+# overlap (the concurrency group queues the second one), which makes the later
+# cron a standby that only does anything when the earlier one was dropped.
+#
 # Scheduled workflows are disabled after 60 days with no repository activity.
 # Push something, or re-enable them in the Actions tab.
 on:
   schedule:
     - cron: "13 * * * *"
+    - cron: "43 * * * *"
   workflow_dispatch:
     inputs:
       backfill:
@@ -43,8 +51,9 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    # Stops short of the next hourly trigger so two jobs never write the same
-    # published state.
+    # Overlap is prevented by the concurrency group, not by this; the ceiling is
+    # here so a wedged run releases the runner instead of blocking the queued
+    # standby behind it for six hours.
     timeout-minutes: 56
     env:
       CINESTAR_API_KEY: ${{ secrets.CINESTAR_API_KEY }}

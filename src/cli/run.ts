@@ -21,7 +21,7 @@ import { refreshFilmContext } from "@/ingest/context";
 import { discoverCineStarSchedule, pollCineStarHalls } from "@/ingest/cinestar";
 import { ingestGoldenApple } from "@/ingest/goldenapple";
 import { settleScreenings } from "@/ingest/settle";
-import { ingestUfd } from "@/ingest/ufd";
+import { ingestUfd, isAwaitingReport } from "@/ingest/ufd";
 import { computeLive } from "@/stats/compute";
 import { loadHistory, loadState, saveHistory, saveLive, saveState } from "@/store/store";
 
@@ -126,6 +126,26 @@ async function once(withDiscovery: boolean) {
   const report: Record<string, unknown> = {};
   const errors: string[] = [];
 
+  const checkUfd = async (deadline: number) => {
+    try {
+      const ufd = await ingestUfd(state, history, { deadline });
+      if (ufd.weeksAdded > 0 || ufd.errors.length > 0) {
+        report.ufd = { ...ufd, unmatched: ufd.unmatched.length, errors: ufd.errors.length };
+      }
+      errors.push(...ufd.errors);
+    } catch (err) {
+      errors.push(`ufd: ${String(err)}`);
+    }
+  };
+
+  // On the Monday a report is due, the official table is the most valuable
+  // fetch in the whole run and it is the one thing that cannot be caught up on
+  // later in the day without the dashboard being wrong in the meantime. Give it
+  // the clock before the chains, which have nothing time-critical in them —
+  // their next reading is five minutes away either way.
+  const ufdFirst = isAwaitingReport(history);
+  if (ufdFirst) await checkUfd(startedAt + budgetMs * 0.5);
+
   // Cinema City first: it is one request for the entire chain, so it always
   // fits, and its data is the bulk of the dashboard.
   try {
@@ -169,17 +189,10 @@ async function once(withDiscovery: boolean) {
 
   report.settle = settleScreenings(state, history);
 
-  // UFD publishes on Monday and is checked twice a day; `backfill` walks the
-  // whole archive and is meant to be run once by hand.
-  try {
-    const ufd = await ingestUfd(state, history, { deadline: startedAt + budgetMs * 1.2 });
-    if (ufd.weeksAdded > 0 || ufd.errors.length > 0) {
-      report.ufd = { ...ufd, unmatched: ufd.unmatched.length, errors: ufd.errors.length };
-    }
-    errors.push(...ufd.errors);
-  } catch (err) {
-    errors.push(`ufd: ${String(err)}`);
-  }
+  // Otherwise UFD is a twice-a-day background check and belongs at the back,
+  // on whatever budget the chains left. `backfill` walks the whole archive and
+  // is meant to be run once by hand.
+  if (!ufdFirst) await checkUfd(startedAt + budgetMs * 1.2);
 
   // Last, and only with whatever budget is left over: articles and ratings are
   // the one part of this that is still there if a run skips it.

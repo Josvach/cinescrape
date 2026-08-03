@@ -61,6 +61,21 @@ export function isAwaitingReport(history: History, now: Date = new Date()): bool
 export const weekKey = (year: number, week: number) =>
   `${year}-W${String(week).padStart(2, "0")}`;
 
+/**
+ * Newest week first, comparing the numbers rather than the file names.
+ *
+ * The week is not zero-padded in the file name, so a plain string sort reads
+ * `top20-2026-9cz.xls` as newer than `top20-2026-30cz.xls`. On the Monday a
+ * report is due that is the difference between fetching this weekend and
+ * fetching one from March.
+ */
+export function byWeekDescending(a: string, b: string): number {
+  const left = parseFileName(a);
+  const right = parseFileName(b);
+  if (!left || !right) return 0;
+  return right.year - left.year || right.week - left.week;
+}
+
 export type UfdIngestResult = {
   articlesScanned: number;
   filesSeen: number;
@@ -118,8 +133,11 @@ export async function ingestUfd(
     result.errors.push(`index: ${String(err)}`);
     return result;
   }
-  // Newest first: a run that runs out of time has still taken this week's file.
-  articles.sort().reverse();
+  // The index lists articles newest first and `fetchArticleUrls` keeps that
+  // order, which is the order we want: a run that runs out of time has still
+  // scanned this month. Sorting them would destroy it — the slugs are Czech
+  // month names, so alphabetically "unor-february" beats "cervenec-july" and
+  // the scan would start in February.
 
   const wanted: string[] = [];
   await rateLimited(
@@ -143,7 +161,7 @@ export async function ingestUfd(
   );
 
   // Newest week first, so the current picture is right even on a partial run.
-  wanted.sort().reverse();
+  wanted.sort(byWeekDescending);
 
   await rateLimited(
     wanted,
