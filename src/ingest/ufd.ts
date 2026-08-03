@@ -100,7 +100,12 @@ export async function ingestUfd(
     : REFRESH_AFTER_HOURS * 60 * 60 * 1000;
   const fresh =
     history.ufdCheckedAt &&
-    Date.now() - new Date(history.ufdCheckedAt).getTime() < intervalMs;
+    Date.now() - new Date(history.ufdCheckedAt).getTime() < intervalMs &&
+    // A history that has never seen an annual file is not fresh however
+    // recently it was checked: without them the all-time totals are the
+    // top-20 undercount this code exists to fix, and waiting out the
+    // half-day back-off would leave the dashboard wrong for that long.
+    Object.keys(history.ufdAnnual ?? {}).length > 0;
   if (!opts.backfill && fresh) {
     result.weeksKnown = Object.keys(history.ufd).length;
     return result;

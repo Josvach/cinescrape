@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { emptyHistory } from "@/store/types";
 
-import { expectedLatestWeekend, isAwaitingReport, latestTotals, weekKey } from "./ufd";
+import { allTimeRanking, expectedLatestWeekend, isAwaitingReport, latestTotals, weekKey } from "./ufd";
 
 const at = (iso: string) => new Date(`${iso}T10:00:00Z`);
 
@@ -84,5 +84,51 @@ describe("latestTotals", () => {
       },
     };
     expect(latestTotals(history).size).toBe(0);
+  });
+});
+
+describe("allTimeRanking", () => {
+  const weekly = (title: string, weekendFrom: string, totalAdmissions: number) => ({
+    year: Number(weekendFrom.slice(0, 4)),
+    week: 1,
+    weekendFrom,
+    entries: [
+      {
+        rank: 1, title, distributor: "", weekOfRun: 1, cinemas: 100,
+        weekendAdmissions: 0, weekendGross: 0, totalAdmissions, totalGross: 0,
+      },
+    ],
+  });
+
+  const annual = (title: string, year: number, admissions: number, premiere: string | null) => ({
+    year,
+    entries: [
+      { rank: 1, title, originalTitle: "", distributor: "", premiere, admissions, gross: 0, screenings: 0 },
+    ],
+  });
+
+  it("prefers the annual lifetime total over the last weekly figure", () => {
+    // The weeklies stop reporting a film once it leaves the top 20, so its
+    // largest weekly total is where it was on the way down — 305 232 against
+    // the 309 277 the annual file says it finished on.
+    const history = emptyHistory();
+    history.ufd = { "2024-W01": weekly("Aristokratka", "2024-01-04", 305_232) };
+    history.ufdAnnual = { "2024": annual("Aristokratka", 2024, 309_277, "2023-12-21") };
+    expect(allTimeRanking(history)[0].admissions).toBe(309_277);
+  });
+
+  it("dates a film by its premiere, not by the first week we saw it", () => {
+    // Without the annual premiere date, a re-release in 2020 would date
+    // Bohemian Rhapsody to 2020.
+    const history = emptyHistory();
+    history.ufd = { "2020-W01": weekly("Bohemian Rhapsody", "2020-01-02", 1_831_714) };
+    history.ufdAnnual = { "2018": annual("Bohemian Rhapsody", 2018, 1_500_000, "2018-11-01") };
+    expect(allTimeRanking(history)[0]).toMatchObject({ year: 2018, admissions: 1_831_714 });
+  });
+
+  it("includes films the weeklies never covered", () => {
+    const history = emptyHistory();
+    history.ufdAnnual = { "2017": annual("Po strništi bos", 2017, 511_000, "2017-08-17") };
+    expect(allTimeRanking(history)).toHaveLength(1);
   });
 });
