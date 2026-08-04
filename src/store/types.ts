@@ -64,6 +64,15 @@ export type Film = {
   czechKey?: string;
   title: string;
   originalTitle: string | null;
+  /**
+   * `"event"` for things that are not films — concerts, opera and theatre
+   * relays, Cirque du Soleil. Cinemas sell them like screenings and they sell
+   * out weeks ahead, which is exactly what makes them look like a runaway hit
+   * in an attendance ranking. UFD does not count them and neither do we.
+   *
+   * Absent means an ordinary film.
+   */
+  kind?: "event";
   /** Press coverage and reviews; refreshed on a much slower beat than occupancy. */
   articles?: Article[];
   rating?: Rating;

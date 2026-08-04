@@ -39,6 +39,15 @@ const REQUEST_INTERVAL_MS = 350;
  */
 const DISCOVERY_HORIZON_DAYS = 45;
 
+/**
+ * The property CineStar puts on concerts, opera relays and Cirque du Soleil.
+ *
+ * These are the screenings that show 66% sold four weeks out, because that is
+ * what a concert does — and in a ranking of film attendance they read as a
+ * blockbuster nobody has heard of. Three such events in Hradec alone.
+ */
+const ALTERNATIVE_PROGRAMME = /^Alternativn[íi] program$/i;
+
 export type CsDiscoverResult = {
   pagesFetched: number;
   eventsSeen: number;
@@ -135,12 +144,22 @@ export async function discoverCineStarSchedule(
       const sample = unregistered.find((c) => c.event.titleId === titleId)!;
       const event = await fetchEvent(sample.event.eventId);
       const n = normalizeEvent(event);
-      state.cineStarTitles[titleId] = resolveFilm(state, {
+      const filmId = resolveFilm(state, {
         chain: "cinestar",
         externalId: n.film.externalId,
         title: n.film.title,
         originalTitle: n.film.originalTitle,
       });
+      state.cineStarTitles[titleId] = filmId;
+
+      // CineStar is the only source that says which titles are not films.
+      // Cinema City sells the same André Rieu concerts with no attributes at
+      // all, so marking the film here is what keeps them out of both chains'
+      // numbers.
+      if (sample.event.properties.some((p) => ALTERNATIVE_PROGRAMME.test(p))) {
+        const film = state.films.find((f) => f.id === filmId);
+        if (film) film.kind = "event";
+      }
       // One lookup also happens to name one hall; the rest stay unnamed, which
       // only affects a label.
       learnHallName(state, sample, n.hall.externalId, n.hall.name);

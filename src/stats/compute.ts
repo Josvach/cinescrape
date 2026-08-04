@@ -243,7 +243,13 @@ export function computeLive(state: State, history: History): Live {
   const cinemasPerFilm = new Map<number, Map<string, { admissions: number; seatsOffered: number }>>();
   const todayScreenings: Screening[] = [];
 
+  // Concerts and opera relays are sold like screenings but are not films, and
+  // a Cirque du Soleil that sold out a month ago would top a ranking of how
+  // films are doing this week.
+  const notFilm = new Set(state.films.filter((f) => f.kind === "event").map((f) => f.id));
+
   for (const s of Object.values(state.screenings)) {
+    if (notFilm.has(s.filmId)) continue;
     const inWeek = s.day >= weekFrom && s.day <= weekTo;
     const isToday = s.day === today;
     if (!inWeek && !isToday) continue;
