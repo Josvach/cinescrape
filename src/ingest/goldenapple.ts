@@ -31,8 +31,42 @@ export type GaIngestResult = {
   rescheduled: number;
   polled: number;
   gone: number;
+  repaired: number;
   errors: string[];
 };
+
+/**
+ * Throw away readings taken after a screening had already started.
+ *
+ * Datakal answers a closed screening with every seat greyed out, so a 10:00
+ * show read at 13:00 comes back as a full house. Seven screenings were sitting
+ * at exactly 100% when this was found, all of them already played, and in ten
+ * days settle would have folded those invented sell-outs into history where
+ * nothing can correct them.
+ *
+ * A reading captured after showtime cannot be salvaged — whatever genuine
+ * figure preceded it has been overwritten — so the screening goes back to
+ * unmeasured and settles as `missed`, which is what actually happened.
+ */
+export function repairClosedReadings(state: State, now: Date = new Date()): number {
+  let repaired = 0;
+  for (const s of Object.values(state.screenings)) {
+    if (s.chain !== "golden_apple" || s.sold === null || s.total === null) continue;
+    if (s.sold < s.total) continue;
+    const startedAt = new Date(s.startsAt).getTime();
+    // A future screening at 100% is a real sell-out and must survive this.
+    if (startedAt > now.getTime()) continue;
+    if (s.at !== null && new Date(s.at).getTime() < startedAt) continue;
+
+    s.sold = null;
+    s.total = null;
+    s.at = null;
+    s.nextPollAt = null;
+    if (s.settled) s.settled = { sold: 0, total: 0, confidence: "missed", capturedAt: null };
+    repaired += 1;
+  }
+  return repaired;
+}
 
 export async function ingestGoldenApple(
   state: State,
@@ -44,8 +78,11 @@ export async function ingestGoldenApple(
     rescheduled: 0,
     polled: 0,
     gone: 0,
+    repaired: 0,
     errors: [],
   };
+
+  result.repaired = repairClosedReadings(state);
 
   try {
     const programme = await fetchProgramme();
@@ -58,12 +95,23 @@ export async function ingestGoldenApple(
   }
 
   const now = Date.now();
-  const due = Object.entries(state.screenings)
-    .filter(([, s]) => s.chain === "golden_apple" && s.nextPollAt !== null)
-    .filter(([, s]) => new Date(s.nextPollAt!).getTime() <= now)
-    // Soonest showtime first — those are the readings that cannot be retaken.
-    .sort((a, b) => a[1].startsAt.localeCompare(b[1].startsAt))
-    .slice(0, opts.batchSize ?? 120);
+  const due: [string, (typeof state.screenings)[string]][] = [];
+  for (const entry of Object.entries(state.screenings)) {
+    const s = entry[1];
+    if (s.chain !== "golden_apple" || s.nextPollAt === null) continue;
+    // A screening that has started is not readable any more: Datakal answers
+    // with every seat greyed out, which reads as a sell-out. Drop it from the
+    // queue rather than take that reading.
+    if (new Date(s.startsAt).getTime() <= now) {
+      s.nextPollAt = null;
+      result.gone += 1;
+      continue;
+    }
+    if (new Date(s.nextPollAt).getTime() <= now) due.push(entry);
+  }
+  // Soonest showtime first — those are the readings that cannot be retaken.
+  due.sort((a, b) => a[1].startsAt.localeCompare(b[1].startsAt));
+  due.splice(opts.batchSize ?? 120);
 
   await rateLimited(
     due,
@@ -146,8 +194,11 @@ function register(state: State, s: GaScreening, result: GaIngestResult): void {
     formats: normalizeFormats(s.attributes),
     lang: languageVersion(s.version),
     soldOut: false,
-    // Poll straight away so a newly listed screening gets its baseline.
-    nextPollAt: new Date(),
+    // Poll straight away so a newly listed screening gets its baseline. The
+    // programme page still lists today's morning shows in the afternoon, and
+    // those are unreadable — queueing one buys a fabricated sell-out, not a
+    // reading.
+    nextPollAt: s.startsAt.getTime() > Date.now() ? new Date() : null,
   });
 
   result.registered += 1;

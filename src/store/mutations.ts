@@ -1,6 +1,9 @@
 import { filmIdentity } from "@/core/match";
 
-import { key, type Chain, type Key, type RampBucket, type Screening, type State } from "./types";
+import { key, type Chain, type Film, type Key, type RampBucket, type Screening, type State } from "./types";
+
+/** Films stored before `czechKey` existed still have to be matchable. */
+const czechKeyOf = (f: Film): string => f.czechKey ?? filmIdentity(f.title, null).matchKey;
 
 export function upsertCinema(
   state: State,
@@ -56,16 +59,32 @@ export function resolveFilm(
   const identity = filmIdentity(input.title, input.originalTitle);
   let film = state.films.find((f) => f.matchKey === identity.matchKey);
   if (!film) film = state.films.find((f) => f.tightKey === identity.tightKey);
+  // Sources that publish no original title key on the Czech one, so their key
+  // can never equal the other chains'. Golden Apple gave us a second
+  // "Spider-Man: Zbrusu nový den" sitting next to the one keyed on
+  // "Spider-Man: Brand New Day". Matching Czech title to Czech title joins them.
+  if (!film) film = state.films.find((f) => czechKeyOf(f) === identity.czechKey);
 
   if (!film) {
     film = {
       id: state.nextFilmId++,
       matchKey: identity.matchKey,
       tightKey: identity.tightKey,
+      czechKey: identity.czechKey,
       title: identity.title,
       originalTitle: identity.originalTitle,
     };
     state.films.push(film);
+  } else {
+    // A film first seen without an original title keeps the Czech-derived key
+    // it was created with; learning the original later is what lets the next
+    // chain find it.
+    film.czechKey ??= identity.czechKey;
+    if (!film.originalTitle && identity.originalTitle) {
+      film.originalTitle = identity.originalTitle;
+      film.matchKey = identity.matchKey;
+      film.tightKey = identity.tightKey;
+    }
   }
 
   state.filmAliases[aliasKey] = film.id;

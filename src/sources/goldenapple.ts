@@ -156,6 +156,8 @@ export type GaOccupancy = {
   seatsTotal: number;
   priceMin: number | null;
   priceMax: number | null;
+  /** False when no seat is on sale — a closed screening, not a full one. */
+  sellable: boolean;
 };
 
 /**
@@ -165,6 +167,12 @@ export type GaOccupancy = {
  * Datakal labels both "Nedostupné" and does not distinguish them, exactly as
  * CineStar's OCCUPIED does not. Both are counted as taken, which is the
  * conservative reading — an unsold blocked seat was never going to be sold.
+ *
+ * The one case that is *not* a reading is a plan where every seat is
+ * unavailable. That is what Datakal returns once sales close, so a 10:00
+ * screening read at 13:00 comes back as a full house — measured, seven of our
+ * screenings were sitting at exactly 100% and every one of them had already
+ * started. `sellable` lets the caller tell the two apart.
  */
 export function readOccupancy(html: string): GaOccupancy {
   const seats = [...html.matchAll(/<g class="seat-item([^"]*)"([\s\S]*?)<\/g>/g)];
@@ -188,6 +196,7 @@ export function readOccupancy(html: string): GaOccupancy {
     seatsTotal: seats.length,
     priceMin: prices.length ? Math.min(...prices) : null,
     priceMax: prices.length ? Math.max(...prices) : null,
+    sellable: seats.length > 0 && sold < seats.length,
   };
 }
 
@@ -211,8 +220,9 @@ export async function fetchSeating(screeningId: string): Promise<GaOccupancy> {
   });
 
   const occupancy = readOccupancy(html);
-  // Once sales close the endpoint still answers, just without a plan. Treating
-  // that as an empty hall would wipe out the last real reading we took.
+  // A response with no plan at all is unambiguous: sales are over. The
+  // every-seat-greyed-out case is not — it looks identical to a real sell-out —
+  // so it is left to the caller, which knows whether the screening has started.
   if (occupancy.seatsTotal === 0) throw new ScreeningGoneError(screeningId);
   return occupancy;
 }

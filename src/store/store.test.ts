@@ -4,7 +4,9 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { loadHistory, loadState, saveState } from "./store";
+import { filmIdentity } from "@/core/match";
+
+import { loadHistory, loadState, mergeDuplicateFilms, saveState } from "./store";
 import { emptyState } from "./types";
 
 const originalDataDir = process.env.DATA_DIR;
@@ -93,3 +95,68 @@ describe("loadHistory", () => {
     expect(history.films).toEqual({});
   });
 });
+
+describe("mergeDuplicateFilms", () => {
+  const film = (id: number, title: string, originalTitle: string | null) => ({
+    id,
+    ...filmIdentity(title, originalTitle),
+  });
+
+  it("folds a Czech-keyed duplicate into the film keyed on its original title", async () => {
+    // What Golden Apple produced: it publishes no original title, so its
+    // Spider-Man could never meet the one the other two chains had keyed on
+    // "Spider-Man: Brand New Day", and the ranking showed the film twice.
+    const state = emptyState();
+    state.films = [
+      film(1, "Spider-Man: Zbrusu nový den", "Spider-Man: Brand New Day"),
+      film(45, "Spider-Man: Zbrusu nový den", null),
+    ];
+    state.filmAliases = { "golden_apple:10550": 45, "cinema_city:900": 1 };
+    state.cineStarTitles = { "10743": 45 };
+    state.ramp = [{ at: "2026-08-03T09", byFilm: { "1": 10, "45": 4 } }];
+    state.screenings = {
+      "golden_apple:161537": { ...emptyScreening(), chain: "golden_apple", filmId: 45 },
+    };
+
+    expect(mergeDuplicateFilms(state)).toBe(1);
+    expect(state.films.map((f) => f.id)).toEqual([1]);
+    // Everything that pointed at the duplicate now points at the survivor.
+    expect(state.filmAliases["golden_apple:10550"]).toBe(1);
+    expect(state.cineStarTitles["10743"]).toBe(1);
+    expect(state.screenings["golden_apple:161537"].filmId).toBe(1);
+    expect(state.ramp[0].byFilm).toEqual({ "1": 14 });
+  });
+
+  it("keeps the original title when the duplicate is the one that has it", async () => {
+    const state = emptyState();
+    state.films = [film(1, "Odyssea", null), film(2, "Odyssea", "The Odyssey")];
+    expect(mergeDuplicateFilms(state)).toBe(1);
+    expect(state.films[0]).toMatchObject({ id: 1, originalTitle: "The Odyssey" });
+  });
+
+  it("leaves genuinely different films alone", async () => {
+    const state = emptyState();
+    state.films = [film(1, "Odyssea", "The Odyssey"), film(2, "Vlny", null)];
+    expect(mergeDuplicateFilms(state)).toBe(0);
+    expect(state.films).toHaveLength(2);
+  });
+});
+
+function emptyScreening() {
+  return {
+    chain: "cinestar" as const,
+    filmId: 0,
+    hallKey: "x",
+    startsAt: "2026-08-03T16:30:00.000Z",
+    day: "2026-08-03",
+    sold: null,
+    total: null,
+    at: null,
+    nextPollAt: null,
+    formats: [],
+    lang: null,
+    soldOut: false,
+    priceMin: null,
+    priceMax: null,
+  };
+}

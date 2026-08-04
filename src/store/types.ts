@@ -54,6 +54,14 @@ export type Film = {
   id: number;
   matchKey: string;
   tightKey: string;
+  /**
+   * The Czech title normalized on its own.
+   *
+   * `matchKey` prefers the original title, which is the better join key when
+   * both chains publish one. Sources that publish only the Czech title — Golden
+   * Apple, the UFD tables — need this to reach the same film.
+   */
+  czechKey?: string;
   title: string;
   originalTitle: string | null;
   /** Press coverage and reviews; refreshed on a much slower beat than occupancy. */

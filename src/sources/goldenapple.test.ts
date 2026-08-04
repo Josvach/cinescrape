@@ -81,6 +81,19 @@ describe("readOccupancy", () => {
     expect(readOccupancy("<div>Predaj ukonceny</div>")).toMatchObject({
       seatsSold: 0,
       seatsTotal: 0,
+      sellable: false,
     });
+  });
+
+  it("marks a plan with no free seat as unsellable", () => {
+    // Once sales close every seat is greyed out, which is indistinguishable
+    // from a sell-out in the markup alone — the flag is what lets the caller
+    // apply the one thing that does tell them apart, the clock.
+    const shut = read("goldenapple-seating.html").replace(
+      /<g class="seat-item"/g,
+      '<g class="seat-item occupied"',
+    );
+    expect(readOccupancy(shut)).toMatchObject({ seatsSold: 95, seatsTotal: 95, sellable: false });
+    expect(occ.sellable).toBe(true);
   });
 });

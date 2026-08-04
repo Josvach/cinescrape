@@ -42,6 +42,16 @@ export function tightKey(input: string): string {
 export type FilmIdentity = {
   matchKey: string;
   tightKey: string;
+  /**
+   * The Czech title on its own.
+   *
+   * Not every source publishes the original title — Golden Apple gives only the
+   * Czech one, and so do the UFD tables. For those the primary key is built
+   * from the Czech title and can never equal the original-title key the other
+   * chains produce, which is how one film ends up in the ranking twice. This is
+   * the key that bridges them.
+   */
+  czechKey: string;
   title: string;
   originalTitle: string | null;
 };
@@ -57,6 +67,7 @@ export function filmIdentity(title: string, originalTitle: string | null): FilmI
   return {
     matchKey,
     tightKey: matchKey.replace(/ /g, ""),
+    czechKey: normalizeTitle(cleanTitle) || cleanTitle.toLowerCase(),
     title: cleanTitle,
     originalTitle: cleanOriginal,
   };
