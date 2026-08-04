@@ -48,9 +48,33 @@ const DISCOVERY_HORIZON_DAYS = 45;
  */
 const ALTERNATIVE_PROGRAMME = /^Alternativn[íi] program$/i;
 
+/**
+ * Flag the titles CineStar labels "Alternativní program" as not being films.
+ *
+ * Exported so the marking can be checked without standing up a whole
+ * discovery run — the property is the only signal either chain gives us.
+ */
+export function markAlternativeProgramme(
+  state: State,
+  candidates: Iterable<{ event: ScheduledEvent }>,
+): number {
+  let marked = 0;
+  for (const c of candidates) {
+    if (!c.event.properties.some((p) => ALTERNATIVE_PROGRAMME.test(p))) continue;
+    const filmId = state.cineStarTitles[c.event.titleId];
+    if (filmId === undefined) continue;
+    const film = state.films.find((f) => f.id === filmId);
+    if (!film || film.kind === "event") continue;
+    film.kind = "event";
+    marked += 1;
+  }
+  return marked;
+}
+
 export type CsDiscoverResult = {
   pagesFetched: number;
   eventsSeen: number;
+  eventsMarked: number;
   registered: number;
   rescheduled: number;
   titlesLookedUp: number;
@@ -72,6 +96,7 @@ export async function discoverCineStarSchedule(
   const result: CsDiscoverResult = {
     pagesFetched: 0,
     eventsSeen: 0,
+    eventsMarked: 0,
     registered: 0,
     rescheduled: 0,
     titlesLookedUp: 0,
@@ -104,6 +129,14 @@ export async function discoverCineStarSchedule(
       onError: (cinema, err) => result.errors.push(`programme ${cinema.slug}: ${String(err)}`),
     },
   );
+
+  // CineStar is the only source that says which titles are not films: Cinema
+  // City sells the same André Rieu concerts with no attributes at all, so the
+  // mark goes on the film and matching carries it to the chain that cannot see
+  // it. Every candidate is checked, not only newly discovered titles — the
+  // concerts were already in the catalogue, so a new-titles-only pass would
+  // never have reached them.
+  result.eventsMarked = markAlternativeProgramme(state, candidates.values());
 
   const unregistered: Candidate[] = [];
   for (const [eventId, c] of candidates) {
@@ -151,15 +184,6 @@ export async function discoverCineStarSchedule(
         originalTitle: n.film.originalTitle,
       });
       state.cineStarTitles[titleId] = filmId;
-
-      // CineStar is the only source that says which titles are not films.
-      // Cinema City sells the same André Rieu concerts with no attributes at
-      // all, so marking the film here is what keeps them out of both chains'
-      // numbers.
-      if (sample.event.properties.some((p) => ALTERNATIVE_PROGRAMME.test(p))) {
-        const film = state.films.find((f) => f.id === filmId);
-        if (film) film.kind = "event";
-      }
       // One lookup also happens to name one hall; the rest stay unnamed, which
       // only affects a label.
       learnHallName(state, sample, n.hall.externalId, n.hall.name);
