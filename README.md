@@ -18,7 +18,8 @@ GitHub Pages. Na telefonu se dá dát „Přidat na plochu" a chová se jako app
 - **Naplnění sálů**, nejplnější projekce, srovnání sítí, kin a formátů
 - **Odhad tržeb**
 - **Recenze a články** ke každému filmu z českých médií
-- **Hodnocení v procentech** (volitelně, přes TMDB)
+- **Hodnocení ČSFD** v procentech, s odkazem na film
+- **Odhad celkové návštěvnosti** za celé nasazení, s pásmem
 
 ## Rozjetí
 
