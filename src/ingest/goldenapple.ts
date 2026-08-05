@@ -25,6 +25,18 @@ import { key, type State } from "@/store/types";
 
 const REQUEST_INTERVAL_MS = 400;
 
+/**
+ * How full a screening must already have been for a jump to 100% to be real.
+ *
+ * A hall does not go from a tenth sold to sold out inside one poll interval;
+ * what does happen in one step is online sales closing, which greys out every
+ * seat at once. Below this the full house is read as the shutter, not a crowd.
+ */
+const SELLOUT_APPROACH = 0.8;
+
+/** How long before a screening online sales can already have closed. */
+const CLOSING_WINDOW_MS = 60 * 60_000;
+
 export type GaIngestResult = {
   seen: number;
   registered: number;
@@ -54,9 +66,11 @@ export function repairClosedReadings(state: State, now: Date = new Date()): numb
     if (s.chain !== "golden_apple" || s.sold === null || s.total === null) continue;
     if (s.sold < s.total) continue;
     const startedAt = new Date(s.startsAt).getTime();
-    // A future screening at 100% is a real sell-out and must survive this.
-    if (startedAt > now.getTime()) continue;
-    if (s.at !== null && new Date(s.at).getTime() < startedAt) continue;
+    // A screening still comfortably in the future at 100% is a real sell-out
+    // and must survive this. Sales close before the show rather than at it, so
+    // the hour before showtime is inside the suspect window too.
+    if (startedAt - CLOSING_WINDOW_MS > now.getTime()) continue;
+    if (s.at !== null && new Date(s.at).getTime() < startedAt - CLOSING_WINDOW_MS) continue;
 
     s.sold = null;
     s.total = null;
@@ -119,6 +133,17 @@ export async function ingestGoldenApple(
       const externalId = k.slice("golden_apple:".length);
       try {
         const occ = await fetchSeating(externalId);
+        // Online sales shut before the film starts, not at it, so the
+        // every-seat-greyed-out answer arrives while the screening is still in
+        // the future — one 09:00 show was recorded at 95/95 that way. A real
+        // sell-out is approached, not jumped to: if the previous reading was
+        // nowhere near full, the hall did not fill in one poll interval, the
+        // shutter came down.
+        if (!occ.sellable && (screening.sold ?? 0) < occ.seatsTotal * SELLOUT_APPROACH) {
+          screening.nextPollAt = null;
+          result.gone += 1;
+          return;
+        }
         recordReading(state, screening, {
           sold: occ.seatsSold,
           total: occ.seatsTotal,

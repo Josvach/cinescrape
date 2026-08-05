@@ -54,9 +54,20 @@ describe("repairClosedReadings", () => {
     expect(state.screenings["golden_apple:1"].sold).toBe(122);
   });
 
-  it("keeps a full house captured before the film started", () => {
+  it("still discards a full house read minutes before the film started", () => {
+    // Online sales close before the show, not at it, so "captured before
+    // showtime" is not on its own evidence of a real sell-out — a 09:00
+    // screening was recorded at 95/95 from a reading taken while it was still
+    // in the future.
     const state = withScreening({ at: "2026-08-03T07:55:00.000Z" });
+    expect(repairClosedReadings(state, NOW)).toBe(1);
+  });
+
+  it("keeps a full house captured well before showtime", () => {
+    // An hour out the shutter has not come down, so this is a real sell-out.
+    const state = withScreening({ at: "2026-08-03T05:00:00.000Z" });
     expect(repairClosedReadings(state, NOW)).toBe(0);
+    expect(state.screenings["golden_apple:1"].sold).toBe(122);
   });
 
   it("leaves a partly sold screening alone", () => {

@@ -66,7 +66,11 @@ export async function refreshFilmContext(
 
   const due = state.films
     .filter((f) => (admissions.get(f.id) ?? 0) >= MIN_ADMISSIONS)
-    .filter((f) => !f.contextAt || new Date(f.contextAt).getTime() < staleBefore)
+    // A film with no rating yet is due whatever its timestamp says. Otherwise
+    // adding a rating source leaves the dashboard blank until every film's
+    // six-hour window happens to expire, which is hours of showing nothing
+    // when the answer was one request away.
+    .filter((f) => !f.rating || !f.contextAt || new Date(f.contextAt).getTime() < staleBefore)
     .sort((a, b) => (admissions.get(b.id) ?? 0) - (admissions.get(a.id) ?? 0))
     .slice(0, opts.limit ?? 12);
 
