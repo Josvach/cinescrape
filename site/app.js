@@ -567,6 +567,13 @@ function filmScreen(d, id, tab) {
   }
 
   const top = f.todayScreenings.slice().sort((a, b) => b.admissions - a.admissions);
+  // Only today's hours. `f.ramp` holds the film's whole measured history, and
+  // the cumulative version of it lives on the Celkově tab.
+  const todayRamp = Object.entries(f.ramp)
+    .filter(([at]) => at.slice(0, 10) === d.date)
+    .sort()
+    .map(([at, sold]) => ({ at, sold }));
+
   return el("div", {}, header,
     card("Dnes", `${wdLabel(d.date)} ${dayLabel(d.date)}`,
       el("div", { class: "hero" }, num(f.today.admissions)),
@@ -577,6 +584,9 @@ function filmScreen(d, id, tab) {
         tile("Kin", num(f.cinemas), "hraje"),
         tile("Volných míst", num(Math.max(f.today.seatsOffered - f.today.admissions, 0)), "dnes"),
         tile("Diváků/projekci", num(f.today.screenings ? f.today.admissions / f.today.screenings : 0), null))),
+    todayRamp.length > 1 &&
+      card("Prodej po hodinách", "Lístky na tenhle film změřené dnes — na jakoukoli projekci, ne jen dnešní.",
+        rampChart(todayRamp, "filmtodayramp", false)),
     f.todayScreenings.length > 0 &&
       card("Dnešní projekce", "Seřazeno podle naplnění.", screeningTable(top.slice(0, 20), true)),
     articlesSection(f));
