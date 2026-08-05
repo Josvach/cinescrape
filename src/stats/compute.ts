@@ -20,13 +20,6 @@ import { CHAIN_LABELS } from "@/lib/format";
 import { pragueDate } from "@/lib/time";
 import type { Article, History, Rating, Screening as Stored, State } from "@/store/types";
 
-/**
- * Share of box office reaching the production side. Real Czech distribution
- * splits vary by film and by week of run; 50% is the rule of thumb, exposed as
- * one clearly-labelled assumption rather than a hidden model.
- */
-export const FILMMAKER_SHARE = 0.5;
-
 // --- shared shapes ---------------------------------------------------------
 
 export type Screening = {
@@ -65,7 +58,6 @@ export type Today = {
   screeningsDone: number;
   sellouts: number;
   gross: number;
-  filmmaker: number;
   /** Tickets sold during each hour of today, for any screening day. */
   ramp: { at: string; sold: number }[];
   soldToday: number;
@@ -85,7 +77,6 @@ export type Week = {
   occupancy: number;
   screenings: number;
   gross: number;
-  filmmaker: number;
   /** Already sold for the rest of the week. */
   presale: number;
   days: DayPoint[];
@@ -391,7 +382,6 @@ export function computeLive(state: State, history: History): Live {
       screeningsDone: todayAgg.done,
       sellouts: todayAgg.sellouts,
       gross: todayAgg.gross,
-      filmmaker: Math.round(todayAgg.gross * FILMMAKER_SHARE),
       ramp: todayRamp,
       soldToday: todayRamp.reduce((s, b) => s + b.sold, 0),
       soldLastHour: lastCompleteHour,
@@ -416,7 +406,6 @@ export function computeLive(state: State, history: History): Live {
       occupancy: weekAgg.seats > 0 ? weekAgg.admissions / weekAgg.seats : 0,
       screenings: weekAgg.screenings,
       gross: weekAgg.gross,
-      filmmaker: Math.round(weekAgg.gross * FILMMAKER_SHARE),
       presale: weekAgg.presale,
       // Always the full Monday-to-Sunday span. Showing only the days we have
       // data for would silently redraw the axis as the week fills in, and hide

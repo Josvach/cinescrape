@@ -16,7 +16,7 @@ GitHub Pages. Na telefonu se dá dát „Přidat na plochu" a chová se jako app
   k zítřku, takže pravá část grafu je předprodej, ne odhad
 - **Křivka nabíhání prodeje** ve stylu Social Blade
 - **Naplnění sálů**, nejplnější projekce, srovnání sítí, kin a formátů
-- **Odhad tržeb** a podílu pro filmaře
+- **Odhad tržeb**
 - **Recenze a články** ke každému filmu z českých médií
 - **Hodnocení v procentech** (volitelně, přes TMDB)
 
@@ -203,8 +203,9 @@ filmů napříč sítěmi, delta logiku rampy a časovou zónu včetně přechod
 
 - **Tržby jsou odhad.** Ani jedna síť neprozradí, v jaké cenové kategorii se
   které sedadlo prodalo (dospělý/student/dítě). Skutečná tržba bude nižší.
-  Podíl pro filmaře je paušálních 50 % (`FILMMAKER_SHARE`), reálné smlouvy se
-  liší film od filmu a týden od týdne.
+  Podíl pro filmaře se nezobrazuje: paušálních 50 % je pravidlo palce, ale
+  reálné smlouvy se liší film od filmu i týden od týdne, takže to číslo
+  vypadalo přesně, aniž by přesné bylo.
 - **Metadata projekcí se po registraci neobnovují**, kromě času začátku, který
   se bere z programové stránky zdarma.
 - Historie se nedá získat zpětně — křivky a trendy dávají smysl až po několika

@@ -24,7 +24,7 @@
  * the code's shape (dropping Postgres took it to 2.0.0), this one tracks what
  * the phone is looking at.
  */
-export const VERSION = "Alpha 0.07";
+export const VERSION = "Alpha 0.0.8";
 
 const CZ = "cs-CZ";
 const nf = new Intl.NumberFormat(CZ);
@@ -371,7 +371,7 @@ function todayScreen(d) {
         tile("Diváci", num(t.admissions), t.seatsOffered > 0 ? `${pct(t.occupancy)} sálů` : null),
         tile("Projekce", num(t.screenings), `${num(t.screeningsDone)} odehráno`),
         tile("Prodáno dnes", `+${num(t.soldToday)}`, t.soldLastHour > 0 ? `+${num(t.soldLastHour)} za hodinu` : "lístků"),
-        tile("Tržby", czk(t.gross), `pro filmaře ${czk(t.filmmaker)}`))),
+        tile("Tržby", czk(t.gross), "odhad"))),
 
     t.ramp.length > 1 &&
       card("Prodej po hodinách", "Kolik lístků se dnes prodalo — na jakoukoli projekci, ne jen dnešní.",
@@ -405,8 +405,7 @@ function weekScreen(d) {
       tiles(
         tile("Projekce", num(w.screenings), "za týden"),
         tile("Předprodej", num(w.presale), "na zbytek týdne"),
-        tile("Tržby", czk(w.gross), "odhad"),
-        tile("Pro filmaře", czk(w.filmmaker), "50 % podíl"))),
+        tile("Tržby", czk(w.gross), "odhad"))),
 
     card("Po dnech", "Lístek se počítá ke dni projekce — co se dnes prodá na zítřek, roste v zítřejším sloupci.",
       dailyBars(w.days, d.date, "week")),
@@ -514,8 +513,7 @@ function filmScreen(d, id, tab) {
             tiles(
               tile("Oficiálně UFD", num(f.official.admissions), `k ${dayLabel(f.official.asOf)}`),
               tile("Naměřeno od té doby", `+${num(f.official.sinceAdmissions)}`, "naše měření"),
-              tile("Tržby UFD", czk(f.official.gross), "hrubé"),
-              tile("Pro filmaře", czk(f.official.gross * 0.5), "50 % podíl")))
+              tile("Tržby UFD", czk(f.official.gross), "hrubé")))
         : card("Oficiální celkem", null,
             el("p", { class: "empty" },
               "Tenhle film zatím nebyl v TOP 20 UFD, takže oficiální celkové číslo neexistuje. " +
