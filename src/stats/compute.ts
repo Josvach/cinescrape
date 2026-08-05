@@ -15,9 +15,10 @@
 
 import { CC_ESTIMATED_TICKET_PRICE_CZK } from "@/ingest/cinemacity";
 import { recentCoverage } from "@/ingest/settle";
-import { allTimeRanking, latestTotals, type AllTimeEntry } from "@/ingest/ufd";
+import { allTimeRanking, latestTotals, runSeries, type AllTimeEntry } from "@/ingest/ufd";
 import { CHAIN_LABELS } from "@/lib/format";
 import { pragueDate } from "@/lib/time";
+import { forecast, originOf, type Forecast } from "./forecast";
 import type { Article, History, Rating, Screening as Stored, State } from "@/store/types";
 
 // --- shared shapes ---------------------------------------------------------
@@ -116,6 +117,8 @@ export type LiveFilm = {
   week: PeriodFilm & { byDay: Record<string, number> };
   /** Official national run total, when the film has appeared in a top 20. */
   official?: { admissions: number; gross: number; asOf: string; sinceAdmissions: number };
+  /** Projected final admissions for the run; absent until UFD has reported it. */
+  forecast?: Forecast;
   cinemas: number;
   sellouts: number;
   presale: number;
@@ -335,6 +338,7 @@ export function computeLive(state: State, history: History): Live {
 
   // --- official ------------------------------------------------------------
   const officialTotals = latestTotals(history);
+  const series = runSeries(history);
   for (const f of films.values()) {
     const official = officialTotals.get(f.id);
     if (!official) continue;
@@ -350,6 +354,12 @@ export function computeLive(state: State, history: History): Live {
       asOf: official.weekendFrom,
       sinceAdmissions: since,
     };
+
+    const run = series.get(f.id);
+    if (run?.points.length) {
+      const origin = originOf({ country: run.country, title: f.title, originalTitle: f.originalTitle });
+      f.forecast = forecast(origin, run.points) ?? undefined;
+    }
   }
 
   for (const f of films.values()) {

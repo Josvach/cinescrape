@@ -1,16 +1,17 @@
 /**
  * Audience rating, from The Movie Database.
  *
- * ČSFD would be the natural source for a Czech audience — it is the rating
- * people here actually quote — but it has no public API and serves a
- * proof-of-work challenge to anything that is not a browser. Defeating that is
- * not something this project does, so the rating comes from TMDB instead: a
- * real API, free, and explicit about allowing this.
+ * The fallback, not the first choice: ČSFD is the rating Czech audiences
+ * quote, and `sources/csfd.ts` reads it now. TMDB covers what ČSFD's cinema
+ * listing does not — a re-release, a film that premiered in an earlier year —
+ * and needs no scraping at all, just a free API key.
  *
- * Entirely optional. Without TMDB_API_KEY the dashboard simply shows no rating.
+ * Entirely optional. Without TMDB_API_KEY the dashboard falls back to ČSFD
+ * alone.
  */
 
 import { fetchJson } from "@/lib/http";
+import type { Rating } from "@/store/types";
 
 const BASE = "https://api.themoviedb.org/3";
 
@@ -23,13 +24,6 @@ type TmdbSearch = {
     vote_average: number;
     vote_count: number;
   }[];
-};
-
-export type Rating = {
-  /** 0–100, the way audiences read it. */
-  percent: number;
-  votes: number;
-  tmdbId: number;
 };
 
 export const hasTmdbKey = () => Boolean(process.env.TMDB_API_KEY);
@@ -58,6 +52,7 @@ export async function fetchRating(
     return {
       percent: Math.round(hit.vote_average * 10),
       votes: hit.vote_count,
+      source: "tmdb",
       tmdbId: hit.id,
     };
   }

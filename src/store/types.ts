@@ -47,7 +47,12 @@ export type Rating = {
   /** 0–100. */
   percent: number;
   votes: number;
-  tmdbId: number;
+  /** Which site the number comes from — they do not agree, so it is labelled. */
+  source: "csfd" | "tmdb";
+  /** Link to the rating's page, when the source has one worth opening. */
+  url?: string;
+  tmdbId?: number;
+  csfdId?: string;
 };
 
 export type Film = {
@@ -161,6 +166,8 @@ export type UfdEntry = {
   rank: number;
   title: string;
   distributor: string;
+  /** ISO-ish country code as UFD writes it: `CZE`, `USA`, `GBR`. */
+  country?: string;
   weekOfRun: number;
   cinemas: number;
   weekendAdmissions: number;

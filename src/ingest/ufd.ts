@@ -23,6 +23,7 @@ import {
   parseFileName,
   type UfdWeek,
 } from "@/sources/ufd";
+import type { WeekendPoint } from "@/stats/forecast";
 import type { History, State, UfdEntry } from "@/store/types";
 
 /** How often to look for a new weekly report when we are already up to date. */
@@ -235,6 +236,9 @@ function store(state: State, history: History, week: UfdWeek, result: UfdIngestR
       rank: row.rank,
       title: row.title,
       distributor: row.distributor,
+      // Needed to tell a Czech release from a foreign one, which is the single
+      // biggest split in how a run behaves after the opening weekend.
+      country: row.country,
       weekOfRun: row.weekOfRun,
       cinemas: row.cinemas,
       weekendAdmissions: row.weekendAdmissions,
@@ -408,4 +412,43 @@ export function latestWeekendFrom(history: History): string | null {
     .filter(Boolean)
     .sort();
   return dates.length ? dates[dates.length - 1] : null;
+}
+
+/**
+ * A film's weekend line from the official tables, oldest first.
+ *
+ * The forecast needs the run as a series, not just its latest total: how the
+ * weekends fall against each other is the whole signal. Bounded by the same
+ * window as `latestTotals`, so a re-release does not inherit the shape of an
+ * earlier run of the same title.
+ */
+export function runSeries(
+  history: History,
+  now: Date = new Date(),
+): Map<number, { country: string | null; points: WeekendPoint[] }> {
+  const since = new Date(now.getTime() - CURRENT_RUN_DAYS * 86_400_000).toISOString().slice(0, 10);
+  const runs = new Map<number, { country: string | null; points: WeekendPoint[] }>();
+
+  const weeks = Object.values(history.ufd ?? {})
+    .filter((w) => w.weekendFrom && w.weekendFrom >= since)
+    .sort((a, b) => a.weekendFrom.localeCompare(b.weekendFrom));
+
+  for (const week of weeks) {
+    for (const e of week.entries) {
+      if (e.filmId === undefined) continue;
+      const run = runs.get(e.filmId) ?? { country: e.country ?? null, points: [] };
+      run.country ??= e.country ?? null;
+      // A film can appear twice in a week only through a data fault; keeping
+      // the first is enough to stop it distorting the decay.
+      if (!run.points.some((p) => p.weekOfRun === e.weekOfRun)) {
+        run.points.push({
+          weekOfRun: e.weekOfRun || run.points.length + 1,
+          weekendAdmissions: e.weekendAdmissions,
+          totalAdmissions: e.totalAdmissions,
+        });
+      }
+      runs.set(e.filmId, run);
+    }
+  }
+  return runs;
 }

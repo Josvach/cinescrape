@@ -29,6 +29,8 @@ export const VERSION = "Alpha 0.0.8";
 const CZ = "cs-CZ";
 const nf = new Intl.NumberFormat(CZ);
 const num = (v) => nf.format(Math.round(v || 0));
+const dec = (v, d = 1) =>
+  new Intl.NumberFormat(CZ, { minimumFractionDigits: d, maximumFractionDigits: d }).format(v || 0);
 const pct = (v, d = 0) =>
   new Intl.NumberFormat(CZ, { style: "percent", maximumFractionDigits: d }).format(v || 0);
 
@@ -98,6 +100,47 @@ const tile = (label, value, note) =>
     note && el("div", { class: "note" }, note));
 
 const tiles = (...items) => el("div", { class: "tiles" }, items.filter(Boolean));
+
+const RATING_SOURCES = { csfd: "ČSFD", tmdb: "TMDB" };
+
+/**
+ * Projected final admissions.
+ *
+ * Shown with its range, always, and with the range said out loud rather than
+ * drawn as a thin error bar nobody reads. Off the opening weekend alone the
+ * band is genuinely 0.6x to 2.1x, and a single confident-looking number there
+ * would be the "times four" folklore wearing a nicer font.
+ */
+function forecastBlock(p) {
+  if (!p) return null;
+  const basis = p.measured
+    ? `z vlastního poklesu filmu (${pct(p.hold)} týden na týden)`
+    : "z průměru trhu, film zatím nemá druhý víkend";
+  return el("div", {},
+    el("h3", { class: "sub" }, "Odhad celkového nasazení"),
+    el("div", { class: "readout" },
+      el("b", {}, num(p.total)),
+      el("span", {}, `diváků · pásmo ${num(p.low)}–${num(p.high)}`)),
+    el("p", { class: "caption", style: "margin:6px 0 0" },
+      `Po ${p.weeks}. týdnu, ${basis}.` +
+      (p.multiplier ? ` To je ${dec(p.multiplier)}× úvodní víkend.` : "")),
+    el("div", { class: "notice" },
+      "Osm z deseti filmů historicky skončilo uvnitř tohohle pásma. Čím dřív v nasazení, tím je širší."));
+}
+
+/**
+ * The two sources do not agree and are not interchangeable, so the chip always
+ * says which one the number came from. ČSFD's links back to the film's page.
+ */
+function ratingChip(rating) {
+  if (!rating) return null;
+  const where = RATING_SOURCES[rating.source] ?? rating.source ?? "";
+  const label = `${num(rating.votes)} hodnocení na ${where}`;
+  const body = [el("b", {}, `${rating.percent} %`), where];
+  return rating.url
+    ? el("a", { class: "rating", href: rating.url, title: label, target: "_blank", rel: "noopener" }, body)
+    : el("span", { class: "rating", title: label }, body);
+}
 
 // ---------------------------------------------------------------- charts
 
@@ -474,9 +517,7 @@ function filmScreen(d, id, tab) {
 
   const header = el("div", {},
     el("header", { class: "masthead" },
-      el("h1", {}, f.title,
-        f.rating && el("span", { class: "rating", title: `${num(f.rating.votes)} hlasů na TMDB` },
-          el("b", {}, `${f.rating.percent} %`), "hodnocení"))),
+      el("h1", {}, f.title, ratingChip(f.rating))),
     f.originalTitle && f.originalTitle !== f.title &&
       el("p", { class: "subtitle" }, f.originalTitle));
 
@@ -513,7 +554,8 @@ function filmScreen(d, id, tab) {
             tiles(
               tile("Oficiálně UFD", num(f.official.admissions), `k ${dayLabel(f.official.asOf)}`),
               tile("Naměřeno od té doby", `+${num(f.official.sinceAdmissions)}`, "naše měření"),
-              tile("Tržby UFD", czk(f.official.gross), "hrubé")))
+              tile("Tržby UFD", czk(f.official.gross), "hrubé")),
+            forecastBlock(f.forecast))
         : card("Oficiální celkem", null,
             el("p", { class: "empty" },
               "Tenhle film zatím nebyl v TOP 20 UFD, takže oficiální celkové číslo neexistuje. " +

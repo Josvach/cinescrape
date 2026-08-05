@@ -231,6 +231,9 @@
         vertical-align: middle; white-space: nowrap;
       }
       .rating b { font-size: 13px; font-weight: 640; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+      /* The chip links to ČSFD when the rating came from there. */
+      a.rating { text-decoration: none; }
+      a.rating:hover { background: var(--border); }
 
       /* Marks a figure as the association's official national number rather
          than our own measurement — the two are not the same thing. */
