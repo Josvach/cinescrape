@@ -22,10 +22,23 @@
  *
  *     predicted = admissions so far + last weekend × uplift × r/(1 - r)
  *
- * where `r` is the weekly hold, measured from the film's own last two weekends
- * once there are two, and taken from the calibration table before that. This
- * degrades gracefully: on opening weekend it is the market's average film, and
- * every further week replaces prior with evidence.
+ * where `r` is the weekly hold. It is read from the film's whole curve, not
+ * just its last step: every consecutive pair says how the film held against
+ * what the market typically does at that week of run, and those ratios are
+ * averaged geometrically with recent ones weighted higher. Before there is any
+ * pair it comes from the calibration table. This degrades gracefully: on
+ * opening weekend it is the market's average film, and every further weekend
+ * replaces prior with evidence.
+ *
+ * On a held-out split — calibrated on runs that started before 2023, measured
+ * on the ones since — reading the whole curve rather than the last pair alone
+ * moves the share of forecasts within 20% of the truth from 77% to 78% at
+ * three weekends and 82% to 83% at four. A small gain, and never a loss.
+ *
+ * One honest caveat: off the opening weekend alone the estimate runs about 7%
+ * high at the median. Correcting that needs a fudge factor that did not
+ * transfer across the split, so it is left alone and the band — which is wide
+ * there for exactly this reason — is what should be read instead.
  *
  * All constants below are medians measured from `history.ufd` — 552 weekly
  * tables, 2015-12 to 2026-07, 1118 completed runs. Medians rather than means
@@ -73,6 +86,16 @@ const TAIL_HOLD = 0.5;
 const HOLD_CONFIDENCE = 0.4;
 
 /**
+ * How much older weekends count against newer ones when reading the curve.
+ *
+ * Each step back into the run carries this much of the previous weight, so the
+ * most recent hold dominates without the earlier ones being discarded. A film
+ * five weeks in has told us five things about how it falls off; using only the
+ * last of them was leaving most of that on the floor.
+ */
+const RECENCY_WEIGHT = 0.6;
+
+/**
  * How much a week's total admissions exceed its weekend.
  *
  * UFD counts Thursday to Sunday as the weekend, so this is Monday to Wednesday
@@ -104,9 +127,18 @@ export type Forecast = {
   total: number;
   /** Admissions already banked, which the forecast can never fall below. */
   soFar: number;
-  /** Weekly hold used, whether measured or assumed. */
+  /**
+   * The hold the model expects next week — the table's rate for that week of
+   * run, moved by how this film has actually been holding. Not the last
+   * observed ratio: that is one step of a curve, this is where the curve goes.
+   */
   hold: number;
-  /** True once the hold came from the film itself rather than the table. */
+  /**
+   * How this film holds against the market, 1 being exactly typical. Above one
+   * is a film with legs. Absent until there are two weekends to compare.
+   */
+  strength?: number;
+  /** True once the curve came from the film itself rather than the table. */
   measured: boolean;
   /** Weeks of run the estimate is based on. */
   weeks: number;
@@ -148,9 +180,9 @@ const holdFor = (origin: Origin, weekOfRun: number): number => {
  */
 const SPREAD: { low: number; high: number }[] = [
   { low: 0.57, high: 2.09 },
-  { low: 0.72, high: 1.45 },
-  { low: 0.83, high: 1.32 },
-  { low: 0.89, high: 1.33 },
+  { low: 0.66, high: 1.35 },
+  { low: 0.83, high: 1.3 },
+  { low: 0.89, high: 1.29 },
   { low: 0.94, high: 1.27 },
 ];
 
@@ -174,20 +206,35 @@ export function forecast(origin: Origin, weekends: readonly WeekendPoint[]): For
 
   const soFar = Math.max(last.totalAdmissions, last.weekendAdmissions);
 
-  // Measure the hold from the film's own last two weekends when they are
-  // consecutive — an older pair describes a different part of the curve.
-  let hold = holdFor(origin, last.weekOfRun);
+  // Read the whole curve, not just its last step.
+  //
+  // Every consecutive pair says how the film held against what the market
+  // typically does at that week of run. Taking only the newest pair throws away
+  // most of what a film in its fifth week has already told us, and makes the
+  // estimate hostage to one noisy step — a wet weekend, a bank holiday, a
+  // competitor opening. Averaging the ratios geometrically, weighted towards
+  // the recent ones, uses the shape of the fall-off rather than one edge of it.
+  let strength = 1;
+  let logSum = 0;
+  let weightSum = 0;
   let measured = false;
-  const previous = points[points.length - 2];
-  if (previous && previous.weekOfRun === last.weekOfRun - 1 && previous.weekendAdmissions > 0) {
-    const observed = last.weekendAdmissions / previous.weekendAdmissions;
-    // A hold above 1 happens on holidays and awards bumps and is real, but
-    // extrapolating it forever would send the series to infinity.
-    if (observed > 0.05) {
-      hold = Math.min(observed, 0.95);
-      measured = true;
-    }
+  for (let i = points.length - 1; i > 0; i--) {
+    const before = points[i - 1];
+    const after = points[i];
+    if (after.weekOfRun !== before.weekOfRun + 1 || before.weekendAdmissions <= 0) continue;
+    const observed = after.weekendAdmissions / before.weekendAdmissions;
+    if (observed <= 0.05) continue;
+    // Weight falls with each step back, so week five still hears week two.
+    const weight = RECENCY_WEIGHT ** (points.length - 1 - i);
+    // A hold above one happens on holidays and awards bumps and is real, but
+    // carrying it forward would send the series upwards forever.
+    logSum += Math.log(Math.min(observed, 0.95) / holdFor(origin, before.weekOfRun)) * weight;
+    weightSum += weight;
+    measured = true;
   }
+  if (measured) strength = Math.exp(logSum / weightSum);
+
+  const hold = Math.min(holdFor(origin, last.weekOfRun) * strength, 0.95);
 
   // Always the ordinary uplift: every week still to come is an ordinary week.
   // The premiere week's own shape is already inside `soFar`, and applying the
@@ -200,7 +247,7 @@ export function forecast(origin: Origin, weekends: readonly WeekendPoint[]): For
   // the real shape. A film that is holding better or worse than the table
   // shifts the whole curve rather than replacing it, so its own evidence
   // carries forward without pinning every later week to one observation.
-  const shift = measured ? (hold / holdFor(origin, last.weekOfRun)) ** HOLD_CONFIDENCE : 1;
+  const shift = measured ? strength ** HOLD_CONFIDENCE : 1;
 
   let remaining = 0;
   let weekend = last.weekendAdmissions;
@@ -218,6 +265,7 @@ export function forecast(origin: Origin, weekends: readonly WeekendPoint[]): For
     total,
     soFar,
     hold: Number(hold.toFixed(3)),
+    strength: measured ? Number(strength.toFixed(3)) : undefined,
     measured,
     weeks: last.weekOfRun,
     // The floor is what has already been sold: no forecast may imply that

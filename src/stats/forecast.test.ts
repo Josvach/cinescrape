@@ -15,13 +15,29 @@ describe("forecast", () => {
     expect(f.low).toBeGreaterThanOrEqual(250_000);
   });
 
-  it("uses the film's own hold once there are two weekends", () => {
+  it("uses the film's own curve once there are two weekends", () => {
     const assumed = forecast("foreign", [point(1, 100_000, 110_000)])!;
     expect(assumed.measured).toBe(false);
+    expect(assumed.strength).toBeUndefined();
 
+    // Holding at 0.80 where the market typically drops to 0.516 is a film with
+    // legs, so its strength is well above one.
     const holding = forecast("foreign", [point(1, 100_000, 110_000), point(2, 80_000, 240_000)])!;
     expect(holding.measured).toBe(true);
-    expect(holding.hold).toBeCloseTo(0.8, 2);
+    expect(holding.strength).toBeGreaterThan(1.4);
+  });
+
+  it("reads every weekend, not just the last pair", () => {
+    // Same final step, different history: a film that has been holding well
+    // all along must project above one that has been sliding and just had a
+    // flat week.
+    const steady = forecast("foreign", [
+      point(1, 100_000, 110_000), point(2, 70_000, 210_000), point(3, 49_000, 290_000),
+    ])!;
+    const collapsed = forecast("foreign", [
+      point(1, 100_000, 110_000), point(2, 30_000, 160_000), point(3, 21_000, 200_000),
+    ])!;
+    expect(steady.strength).toBeGreaterThan(collapsed.strength!);
   });
 
   it("projects a leggy film above a front-loaded one from the same opening", () => {

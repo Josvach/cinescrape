@@ -21,7 +21,7 @@ import { refreshFilmContext } from "@/ingest/context";
 import { discoverCineStarSchedule, pollCineStarHalls } from "@/ingest/cinestar";
 import { ingestGoldenApple } from "@/ingest/goldenapple";
 import { settleScreenings } from "@/ingest/settle";
-import { ingestUfd, isAwaitingReport } from "@/ingest/ufd";
+import { ingestUfd, isAwaitingReport, relinkUfd } from "@/ingest/ufd";
 import { computeLive } from "@/stats/compute";
 import { loadHistory, loadState, saveHistory, saveLive, saveState } from "@/store/store";
 
@@ -125,6 +125,12 @@ async function once(withDiscovery: boolean) {
 
   const report: Record<string, unknown> = {};
   const errors: string[] = [];
+
+  // Before anything reads the official numbers: a film's id can have changed
+  // since the report was stored, and an unlinked line is invisible to both the
+  // official total and the forecast.
+  const relinked = relinkUfd(state, history);
+  if (relinked > 0) report.relinked = relinked;
 
   const checkUfd = async (deadline: number) => {
     try {

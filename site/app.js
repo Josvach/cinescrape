@@ -114,7 +114,8 @@ const RATING_SOURCES = { csfd: "ČSFD", tmdb: "TMDB" };
 function forecastBlock(p) {
   if (!p) return null;
   const basis = p.measured
-    ? `z vlastního poklesu filmu (${pct(p.hold)} týden na týden)`
+    ? `z vlastního průběhu filmu — drží ${dec(p.strength ?? 1, 2)}× oproti trhu, ` +
+      `příští týden čekáme ${pct(p.hold)} předchozího víkendu`
     : "z průměru trhu, film zatím nemá druhý víkend";
   return el("div", {},
     el("h3", { class: "sub" }, "Odhad celkového nasazení"),

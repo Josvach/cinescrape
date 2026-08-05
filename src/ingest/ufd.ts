@@ -452,3 +452,55 @@ export function runSeries(
   }
   return runs;
 }
+
+/**
+ * Re-resolve every stored report line against the current catalogue.
+ *
+ * `filmId` used to be written once, when the week was first downloaded, and
+ * then trusted forever. Two things break that. A film can appear in the
+ * official table before either chain lists it, so at ingest time there is
+ * nothing to match and the line stays unlinked for good. And merging duplicate
+ * films renumbers ids — after Golden Apple's second "Spider-Man" was folded
+ * away, the top line of the newest report still pointed at the id that had just
+ * been deleted, so the film showed no official total and no forecast at all
+ * while sitting first in the table with 202 867 admissions.
+ *
+ * Rebuilding the link each run costs a few milliseconds and cannot go stale.
+ */
+export function relinkUfd(state: State, history: History): number {
+  const byMatchKey = new Map<string, number>();
+  const byTightKey = new Map<string, number>();
+  const byCzech = new Map<string, number>();
+  for (const film of state.films) {
+    if (!byMatchKey.has(film.matchKey)) byMatchKey.set(film.matchKey, film.id);
+    if (!byTightKey.has(film.tightKey)) byTightKey.set(film.tightKey, film.id);
+    const czech = film.czechKey ?? filmIdentity(film.title, null).matchKey;
+    if (czech && !byCzech.has(czech)) byCzech.set(czech, film.id);
+  }
+
+  const resolve = (title: string): number | undefined => {
+    const identity = filmIdentity(title, null);
+    return (
+      byMatchKey.get(identity.matchKey) ??
+      byTightKey.get(identity.tightKey) ??
+      byCzech.get(identity.czechKey)
+    );
+  };
+
+  let changed = 0;
+  const cache = new Map<string, number | undefined>();
+  for (const week of Object.values(history.ufd ?? {})) {
+    for (const entry of week.entries) {
+      const key = entry.title.trim().toLowerCase();
+      if (!cache.has(key)) cache.set(key, resolve(entry.title));
+      const filmId = cache.get(key);
+      if (filmId === entry.filmId) continue;
+      // Only ever add or correct a link; never drop one because the film has
+      // since left the working set and been folded into history.
+      if (filmId === undefined && entry.filmId !== undefined) continue;
+      entry.filmId = filmId;
+      changed += 1;
+    }
+  }
+  return changed;
+}
