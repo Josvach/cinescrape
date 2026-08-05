@@ -47,6 +47,16 @@ describe("site/index.html", () => {
     expect(html).toMatch(/name="robots"\s+content="noindex/);
   });
 
+  it("lets the publish step cache-bust the script", () => {
+    // Pages serves app.js with a max-age, so a plain <script src="app.js">
+    // leaves a phone that already opened the page running the old code — it
+    // showed a removed version string and a removed tile for hours. publish.sh
+    // rewrites this exact string, so the two have to keep matching.
+    expect(html).toContain('src="app.js"');
+    const publish = readFileSync(fileURLToPath(new URL("../scripts/publish.sh", import.meta.url)), "utf8");
+    expect(publish).toContain('src=\\"app.js\\"');
+  });
+
   it("shows a build version, and styles it", () => {
     // The version exists so a screenshot can be pinned to a build; one that is
     // declared but never rendered, or rendered with no rule behind it, would
