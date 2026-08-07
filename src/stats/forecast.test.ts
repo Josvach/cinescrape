@@ -136,20 +136,33 @@ describe("forecast with screen signals", () => {
     expect(packed.strength).toBeGreaterThan(thin.strength!);
   });
 
-  it("cuts the projection when planned screens are collapsing", () => {
-    const holding = forecast("foreign", [point(1, 100_000, 110_000), point(2, 60_000, 200_000)])!;
-    const losing = forecast(
+  it("does not move the estimate when screens fall at the normal pace", () => {
+    // The typical week-2 film keeps 0.711 of its screens; a film doing exactly
+    // that carries no signal and must land on the no-planned-ratio estimate.
+    const plain = forecast("foreign", [point(1, 100_000, 110_000), point(2, 60_000, 200_000)])!;
+    const normal = forecast(
       "foreign",
       [point(1, 100_000, 110_000), point(2, 60_000, 200_000)],
-      { plannedScreenRatio: 0.4 },
+      { plannedScreenRatio: 0.711 },
     )!;
-    expect(losing.total).toBeLessThan(holding.total);
-    expect(losing.screenTrend).toBe(0.4);
+    expect(normal.screenTrend).toBeCloseTo(1, 2);
+    expect(normal.total).toBe(plain.total);
   });
 
-  it("ignores a planned ratio that is scraping noise", () => {
-    const f = forecast("foreign", [point(1, 100_000, 110_000)], { plannedScreenRatio: 0.01 })!;
-    // Clamped into the trusted band, not applied raw.
-    expect(f.screenTrend).toBe(0.3);
+  it("cuts only when screens fall faster than the normal decline", () => {
+    const normal = forecast("foreign", [point(1, 100_000, 110_000), point(2, 60_000, 200_000)], {
+      plannedScreenRatio: 0.711,
+    })!;
+    const collapsing = forecast("foreign", [point(1, 100_000, 110_000), point(2, 60_000, 200_000)], {
+      plannedScreenRatio: 0.4, // against a 0.711 norm, well below
+    })!;
+    expect(collapsing.total).toBeLessThan(normal.total);
+    expect(collapsing.screenTrend).toBeLessThan(1);
+  });
+
+  it("clamps a deviation that is scraping noise", () => {
+    const f = forecast("foreign", [point(1, 100_000, 110_000)], { plannedScreenRatio: 0.001 })!;
+    // Normalized (÷0.602) then clamped into the trusted deviation band.
+    expect(f.screenTrend).toBe(0.5);
   });
 });

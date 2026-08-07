@@ -30,8 +30,9 @@
  *     averaged geometrically with recent pairs weighted higher;
  *   - before that, how hard the opening packed its screens (admissions per
  *     cinema), which predicts legginess on its own;
- *   - and the count of *planned* screenings from our scraping, which bends the
- *     week immediately ahead — the one forward signal UFD cannot give.
+ *   - and how its *planned* screenings move against the normal decline: screens
+ *     always fall, so only shedding them faster or slower than usual is news,
+ *     and our scraping sees next week's schedule before UFD reports it.
  *
  * Preview weekends do not enter any of this. UFD numbers them below the
  * opening; `normalizeRun` strips them from the decay math and fixes UFD's
@@ -130,19 +131,33 @@ const WEEKDAY_UPLIFT: Record<Origin, number> = { cz: 1.634, foreign: 1.513 };
 const INTENSITY = { pivot: 160, exp: 0.5, lo: 0.6, hi: 1.3 };
 
 /**
- * Elasticity of the weekend hold to a change in how many cinemas play the film.
+ * Screens always fall — the only question is how fast.
  *
- * Fitted across 2 399 week-to-week pairs: `hold ≈ table × cinemaRatio ^ 0.306`.
- * A film dropping 45% of its screens holds at 0.83 of the table rate; one
- * gaining 10% at 1.03. This is what lets the live count of *planned* screenings
- * — which UFD does not publish until the week is over, but our scraping sees in
- * advance — bend the near-term projection. Screen count really is, as anyone in
- * distribution will say, one of the biggest levers on the week ahead.
+ * A film sheds cinemas every week: the median drop is 40% from the opening to
+ * the second weekend, easing to about 18% a week by the fifth. That decline is
+ * already inside the hold table, which was measured from admissions that fell
+ * as the screens did. So the raw screen count says nothing on its own — a
+ * ratio below one is simply normal — and only the *deviation* from the usual
+ * pace carries information. This is the typical week-to-week cinema ratio by
+ * week of run, the yardstick a film's own screen change is measured against.
  */
-const SCREEN_ELASTICITY = 0.306;
+const TYPICAL_SCREEN_DECLINE = [0.602, 0.711, 0.796, 0.809, 0.81, 0.826];
 
-/** Live planned/played screen ratios outside this are scraping noise, not signal. */
-const SCREEN_RATIO_BOUNDS = { min: 0.3, max: 1.6 };
+/**
+ * Elasticity of the hold to a *deviation* from that typical screen decline.
+ *
+ * Fitted across 2 387 week-to-week pairs on `hold ≈ table × (ratio / typical)
+ * ^ 0.75`: a film losing screens a quarter faster than usual holds at 0.69 of
+ * the table rate, one holding its screens while others shed theirs at 1.21. A
+ * film declining at the normal pace lands on 1 — no adjustment — which is the
+ * whole point. This lets the live count of *planned* screenings, which UFD does
+ * not publish until the week is over but our scraping sees in advance, bend the
+ * week ahead, without double-counting the decline every film shares.
+ */
+const SCREEN_ELASTICITY = 0.75;
+
+/** How far from the normal pace a screen move may register, after normalizing. */
+const SCREEN_DEVIATION_BOUNDS = { min: 0.5, max: 1.6 };
 
 /**
  * Beyond this the remaining run is negligible and the geometric series stops
@@ -215,7 +230,11 @@ export type Forecast = {
    * weekend and dividing by it produces nonsense like 28×.
    */
   multiplier?: number;
-  /** The planned-screen ratio that bent the projection, when one was supplied. */
+  /**
+   * How the film's planned screens move against the normal decline for its
+   * week: 1 is exactly average, below one is shedding faster than usual, above
+   * one is holding better. Present only when a live schedule was supplied.
+   */
   screenTrend?: number;
 };
 
@@ -257,6 +276,11 @@ const holdFor = (origin: Origin, weekOfRun: number): number => {
   const table = HOLD_BY_WEEK[origin];
   return weekOfRun >= 1 && weekOfRun <= table.length ? table[weekOfRun - 1] : TAIL_HOLD;
 };
+
+const typicalScreenDecline = (weekOfRun: number): number =>
+  weekOfRun >= 1 && weekOfRun <= TYPICAL_SCREEN_DECLINE.length
+    ? TYPICAL_SCREEN_DECLINE[weekOfRun - 1]
+    : TYPICAL_SCREEN_DECLINE[TYPICAL_SCREEN_DECLINE.length - 1];
 
 /**
  * How wide the range is, by how many weekends have been seen.
@@ -347,10 +371,18 @@ export function forecast(
   const shift = strength ** HOLD_CONFIDENCE;
 
   // A live planned-screen ratio bends only the first week ahead — beyond that
-  // we cannot see the schedule, and the film's curve takes over.
+  // we cannot see the schedule, and the film's curve takes over. It is measured
+  // against the normal decline for that week, so a film shedding screens at the
+  // usual pace lands on 1 and moves nothing; only a faster or slower fall does.
   const screenTrend =
     options.plannedScreenRatio != null
-      ? Math.max(SCREEN_RATIO_BOUNDS.min, Math.min(SCREEN_RATIO_BOUNDS.max, options.plannedScreenRatio))
+      ? Math.max(
+          SCREEN_DEVIATION_BOUNDS.min,
+          Math.min(
+            SCREEN_DEVIATION_BOUNDS.max,
+            options.plannedScreenRatio / typicalScreenDecline(last.weekOfRun),
+          ),
+        )
       : undefined;
 
   let remaining = 0;

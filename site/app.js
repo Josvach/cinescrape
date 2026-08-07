@@ -120,11 +120,13 @@ function forecastBlock(p) {
     : p.strength != null
       ? `podle síly startu (${dec(p.strength, 2)}× oproti trhu), film zatím nemá druhý víkend`
       : "z průměru trhu, film zatím nemá druhý víkend";
-  // The live planned-screen signal, when scraping saw the schedule move.
+  // The live planned-screen signal, measured against the normal weekly decline
+  // — screens always fall, so only a faster or slower fall than usual moves the
+  // estimate.
   const screens =
     p.screenTrend != null && Math.abs(p.screenTrend - 1) >= 0.1
-      ? ` Naplánovaných projekcí na příští týden je ${p.screenTrend < 1 ? "méně" : "více"} ` +
-        `(${dec(p.screenTrend, 2)}× oproti tomuto), což odhad ${p.screenTrend < 1 ? "snižuje" : "zvyšuje"}.`
+      ? ` Projekcí ubývá ${p.screenTrend < 1 ? "rychleji" : "pomaleji"} než obvykle ` +
+        `(${dec(p.screenTrend, 2)}× oproti běžnému tempu), což odhad ${p.screenTrend < 1 ? "snižuje" : "zvyšuje"}.`
       : "";
   return el("div", {},
     el("h3", { class: "sub" }, "Odhad celkového nasazení"),

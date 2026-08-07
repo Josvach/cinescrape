@@ -339,9 +339,11 @@ export function computeLive(state: State, history: History): Live {
   // --- planned-screen trend, from our own schedule --------------------------
   // How a film's screen count is about to move: screenings booked for the next
   // seven days against those in the last seven. This is the forward signal UFD
-  // cannot give, and it feeds the forecast's screen elasticity. A ratio built
-  // from our three-chain sample is robust where an absolute count would not be:
-  // the sampling fraction cancels top and bottom.
+  // cannot give, and it feeds the forecast's screen elasticity, where it is
+  // measured against the normal weekly decline — screens always fall, so only a
+  // faster or slower fall than usual counts. A ratio built from our three-chain
+  // sample is robust where an absolute count would not be: the sampling
+  // fraction cancels top and bottom.
   const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
   const screenWindow = new Map<number, { past: number; next: number }>();
   for (const s of Object.values(state.screenings)) {
