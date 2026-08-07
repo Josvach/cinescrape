@@ -439,12 +439,15 @@ export function runSeries(
       const run = runs.get(e.filmId) ?? { country: e.country ?? null, points: [] };
       run.country ??= e.country ?? null;
       // A film can appear twice in a week only through a data fault; keeping
-      // the first is enough to stop it distorting the decay.
+      // the first is enough to stop it distorting the decay. The true weekOfRun
+      // is passed through untouched — including UFD's week 0 — so the forecast's
+      // own normalization can tell a preview from a 0-indexed opening.
       if (!run.points.some((p) => p.weekOfRun === e.weekOfRun)) {
         run.points.push({
-          weekOfRun: e.weekOfRun || run.points.length + 1,
+          weekOfRun: e.weekOfRun,
           weekendAdmissions: e.weekendAdmissions,
           totalAdmissions: e.totalAdmissions,
+          cinemas: e.cinemas,
         });
       }
       runs.set(e.filmId, run);

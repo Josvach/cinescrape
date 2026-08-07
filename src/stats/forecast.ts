@@ -22,26 +22,36 @@
  *
  *     predicted = admissions so far + last weekend × uplift × r/(1 - r)
  *
- * where `r` is the weekly hold. It is read from the film's whole curve, not
- * just its last step: every consecutive pair says how the film held against
- * what the market typically does at that week of run, and those ratios are
- * averaged geometrically with recent ones weighted higher. Before there is any
- * pair it comes from the calibration table. This degrades gracefully: on
- * opening weekend it is the market's average film, and every further weekend
- * replaces prior with evidence.
+ * where `r` is the weekly hold. Three things inform it, in order of how much
+ * the film has yet shown us:
+ *
+ *   - its own weekend curve, once there are two weekends to compare — every
+ *     consecutive pair against what the market typically does at that week,
+ *     averaged geometrically with recent pairs weighted higher;
+ *   - before that, how hard the opening packed its screens (admissions per
+ *     cinema), which predicts legginess on its own;
+ *   - and the count of *planned* screenings from our scraping, which bends the
+ *     week immediately ahead — the one forward signal UFD cannot give.
+ *
+ * Preview weekends do not enter any of this. UFD numbers them below the
+ * opening; `normalizeRun` strips them from the decay math and fixes UFD's
+ * habit of numbering some openings 0 and others 1. Their admissions are never
+ * lost — they sit in the cumulative total the forecast builds on — they are
+ * only kept from masquerading as the opening weekend.
  *
  * On a held-out split — calibrated on runs that started before 2023, measured
- * on the ones since — reading the whole curve rather than the last pair alone
- * moves the share of forecasts within 20% of the truth from 77% to 78% at
- * three weekends and 82% to 83% at four. A small gain, and never a loss.
+ * on the ones since — the opening-weekend forecast lands within 20% of the
+ * truth 41% of the time, up from 33% before the preview fix and the intensity
+ * prior. Later stages hold around 75-82%. The screen-trend signal is not in
+ * that number: it is live-only and cannot be backtested, because UFD publishes
+ * no forward screen count to test it against.
  *
- * One honest caveat: off the opening weekend alone the estimate runs about 7%
- * high at the median. Correcting that needs a fudge factor that did not
- * transfer across the split, so it is left alone and the band — which is wide
- * there for exactly this reason — is what should be read instead.
+ * One honest caveat: off the opening weekend the median still runs a few
+ * per cent off, and the band — deliberately wide there, 0.57x to 2.09x — is
+ * what should be read rather than the point estimate.
  *
  * All constants below are medians measured from `history.ufd` — 552 weekly
- * tables, 2015-12 to 2026-07, 1118 completed runs. Medians rather than means
+ * tables, 2015-12 to 2026-07, ~1100 completed runs. Medians rather than means
  * because the distribution has a long right tail and a handful of phenomena
  * would otherwise drag the typical film upwards.
  */
@@ -105,6 +115,36 @@ const RECENCY_WEIGHT = 0.6;
 const WEEKDAY_UPLIFT: Record<Origin, number> = { cz: 1.634, foreign: 1.513 };
 
 /**
+ * Opening intensity — admissions per cinema on the opening weekend — as a prior
+ * on how leggy the film will be, used only until its own curve is measurable.
+ *
+ * A film packing its houses has room to keep selling; one spread thin across
+ * every screen has already found its audience and front-loads. Measured over
+ * the archive, the final multiplier climbs monotonically with opening
+ * per-cinema attendance: 2.45× for films opening at 20-40 admissions a cinema,
+ * 3.33× for those above 120. On a held-out split the prior lifts the share of
+ * opening-weekend forecasts within 20% of the truth from 33% to 40%.
+ *
+ *     strength ≈ clamp((perCinema / PIVOT) ^ EXP, LO, HI)
+ */
+const INTENSITY = { pivot: 160, exp: 0.5, lo: 0.6, hi: 1.3 };
+
+/**
+ * Elasticity of the weekend hold to a change in how many cinemas play the film.
+ *
+ * Fitted across 2 399 week-to-week pairs: `hold ≈ table × cinemaRatio ^ 0.306`.
+ * A film dropping 45% of its screens holds at 0.83 of the table rate; one
+ * gaining 10% at 1.03. This is what lets the live count of *planned* screenings
+ * — which UFD does not publish until the week is over, but our scraping sees in
+ * advance — bend the near-term projection. Screen count really is, as anyone in
+ * distribution will say, one of the biggest levers on the week ahead.
+ */
+const SCREEN_ELASTICITY = 0.306;
+
+/** Live planned/played screen ratios outside this are scraping noise, not signal. */
+const SCREEN_RATIO_BOUNDS = { min: 0.3, max: 1.6 };
+
+/**
  * Beyond this the remaining run is negligible and the geometric series stops
  * being a fair description — prints come out of cinemas rather than decaying
  * forever.
@@ -120,6 +160,20 @@ export type WeekendPoint = {
   weekendAdmissions: number;
   /** Cumulative admissions for the whole run at that point. */
   totalAdmissions: number;
+  /** Cinemas playing the film that week, when UFD reported it. */
+  cinemas?: number;
+};
+
+export type ForecastOptions = {
+  /**
+   * Planned screenings next week over those this week, from our own scraping.
+   *
+   * The one forward-looking signal UFD cannot give: it reports a week only once
+   * it is over, while the chains publish next week's schedule days ahead. A
+   * value below one means the film is losing screens and will fall faster than
+   * its curve alone suggests. Left out, the projection uses the curve only.
+   */
+  plannedScreenRatio?: number;
 };
 
 export type Forecast = {
@@ -135,7 +189,10 @@ export type Forecast = {
   hold: number;
   /**
    * How this film holds against the market, 1 being exactly typical. Above one
-   * is a film with legs. Absent until there are two weekends to compare.
+   * is a film with legs. Comes from the film's own weekend curve once there are
+   * two to compare, and from the opening's per-cinema intensity before that.
+   * Absent only when neither is available (a week-1 film UFD gave no screen
+   * count for).
    */
   strength?: number;
   /** True once the curve came from the film itself rather than the table. */
@@ -158,7 +215,43 @@ export type Forecast = {
    * weekend and dividing by it produces nonsense like 28×.
    */
   multiplier?: number;
+  /** The planned-screen ratio that bent the projection, when one was supplied. */
+  screenTrend?: number;
 };
+
+/**
+ * Strip preview weekends and fix UFD's inconsistent opening numbering.
+ *
+ * UFD numbers the opening weekend 0 for some films and 1 for others — 789 films
+ * open at week 0, and for 711 of them that row is the real premiere, not a
+ * preview. The old filter dropped everything below week 1, so those 711 films
+ * lost their opening weekend and the *second* weekend was mistaken for the
+ * first, throwing off both the multiplier and every hold lookup.
+ *
+ * Two kinds of preview. A weekend UFD numbers *below* zero is one it has
+ * explicitly labelled a preview, and is dropped whatever its size — "Mimoni a
+ * monstra" previewed at 32 299 against a 56 944 premiere, more than half, and
+ * is still a preview. A week *zero* is the opening 90% of the time, so it is
+ * dropped only when it is tiny next to the weekend after it (Ježek Sonic:
+ * 4 716 against a 74 812 premiere). Either way the admissions are not lost —
+ * they sit in the running total — and whatever survives is reindexed so the
+ * opening is week 1, matching the hold table.
+ */
+export function normalizeRun(weekends: readonly WeekendPoint[]): WeekendPoint[] {
+  const sorted = [...weekends].sort((a, b) => a.weekOfRun - b.weekOfRun);
+  let start = 0;
+  while (start < sorted.length - 1) {
+    const p = sorted[start];
+    const isPreview =
+      p.weekOfRun < 0 ||
+      (p.weekOfRun < 1 && p.weekendAdmissions < 0.35 * sorted[start + 1].weekendAdmissions);
+    if (!isPreview) break;
+    start++;
+  }
+  const kept = sorted.slice(start);
+  // UFD 0-indexed this film's opening; shift the whole series so it starts at 1.
+  return kept[0]?.weekOfRun === 0 ? kept.map((p) => ({ ...p, weekOfRun: p.weekOfRun + 1 })) : kept;
+}
 
 const holdFor = (origin: Origin, weekOfRun: number): number => {
   const table = HOLD_BY_WEEK[origin];
@@ -190,16 +283,12 @@ const SPREAD: { low: number; high: number }[] = [
  * @param weekends the film's UFD weekend line, oldest first. One entry is
  *   enough; more is better.
  */
-export function forecast(origin: Origin, weekends: readonly WeekendPoint[]): Forecast | null {
-  const sorted = [...weekends].sort((a, b) => a.weekOfRun - b.weekOfRun);
-
-  // UFD numbers preview weekends below one — "Mimoni a monstra" opened with a
-  // week -1 of 32 299 before its real week 1 of 56 944. Those admissions are
-  // already inside the running total, but treating a preview as the opening
-  // weekend makes the run look like it multiplied nine times over, and the
-  // rise from preview to premiere reads as a film gaining momentum.
-  const previews = sorted.filter((p) => p.weekOfRun < 1);
-  const points = sorted.length > previews.length ? sorted.filter((p) => p.weekOfRun >= 1) : sorted;
+export function forecast(
+  origin: Origin,
+  weekends: readonly WeekendPoint[],
+  options: ForecastOptions = {},
+): Forecast | null {
+  const points = normalizeRun(weekends);
 
   const last = points[points.length - 1];
   if (!last || last.weekendAdmissions <= 0) return null;
@@ -233,6 +322,14 @@ export function forecast(origin: Origin, weekends: readonly WeekendPoint[]): For
     measured = true;
   }
   if (measured) strength = Math.exp(logSum / weightSum);
+  else if (points[0].cinemas && points[0].cinemas > 0) {
+    // No curve yet, so lean on how hard the opening packed its screens.
+    const perCinema = points[0].weekendAdmissions / points[0].cinemas;
+    strength = Math.max(
+      INTENSITY.lo,
+      Math.min(INTENSITY.hi, (perCinema / INTENSITY.pivot) ** INTENSITY.exp),
+    );
+  }
 
   const hold = Math.min(holdFor(origin, last.weekOfRun) * strength, 0.95);
 
@@ -247,13 +344,21 @@ export function forecast(origin: Origin, weekends: readonly WeekendPoint[]): For
   // the real shape. A film that is holding better or worse than the table
   // shifts the whole curve rather than replacing it, so its own evidence
   // carries forward without pinning every later week to one observation.
-  const shift = measured ? strength ** HOLD_CONFIDENCE : 1;
+  const shift = strength ** HOLD_CONFIDENCE;
+
+  // A live planned-screen ratio bends only the first week ahead — beyond that
+  // we cannot see the schedule, and the film's curve takes over.
+  const screenTrend =
+    options.plannedScreenRatio != null
+      ? Math.max(SCREEN_RATIO_BOUNDS.min, Math.min(SCREEN_RATIO_BOUNDS.max, options.plannedScreenRatio))
+      : undefined;
 
   let remaining = 0;
   let weekend = last.weekendAdmissions;
   for (let week = 0; week < MAX_FURTHER_WEEKS; week++) {
-    const rate = Math.min(holdFor(origin, last.weekOfRun + week) * shift, 0.95);
-    weekend *= rate;
+    let rate = holdFor(origin, last.weekOfRun + week) * shift;
+    if (week === 0 && screenTrend !== undefined) rate *= screenTrend ** SCREEN_ELASTICITY;
+    weekend *= Math.min(rate, 0.95);
     if (weekend < MIN_WEEKEND_ADMISSIONS) break;
     remaining += weekend * uplift;
   }
@@ -265,7 +370,7 @@ export function forecast(origin: Origin, weekends: readonly WeekendPoint[]): For
     total,
     soFar,
     hold: Number(hold.toFixed(3)),
-    strength: measured ? Number(strength.toFixed(3)) : undefined,
+    strength: strength !== 1 ? Number(strength.toFixed(3)) : undefined,
     measured,
     weeks: last.weekOfRun,
     // The floor is what has already been sold: no forecast may imply that
@@ -276,6 +381,7 @@ export function forecast(origin: Origin, weekends: readonly WeekendPoint[]): For
       points[0].weekOfRun <= 1 && points[0].weekendAdmissions > 0
         ? Number((total / points[0].weekendAdmissions).toFixed(2))
         : undefined,
+    screenTrend: screenTrend !== undefined ? Number(screenTrend.toFixed(2)) : undefined,
   };
 }
 

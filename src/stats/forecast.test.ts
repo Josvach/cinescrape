@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { forecast, originOf, type WeekendPoint } from "./forecast";
+import { forecast, normalizeRun, originOf, type WeekendPoint } from "./forecast";
 
 const point = (weekOfRun: number, weekendAdmissions: number, totalAdmissions: number): WeekendPoint => ({
   weekOfRun,
@@ -63,8 +63,12 @@ describe("forecast", () => {
       point(2, 27_043, 160_000),
     ])!;
     expect(withPreview.multiplier).toBeLessThan(6);
-    // The preview's admissions still count — they are inside the running total.
+    // The preview's admissions still count — they are inside the running total,
+    // so soFar (and therefore the forecast) includes every preview ticket. The
+    // preview is excluded from the *decay basis and multiplier only*, never
+    // from attendance.
     expect(withPreview.soFar).toBe(160_000);
+    expect(withPreview.total).toBeGreaterThanOrEqual(160_000);
   });
 
   it("reports no multiplier when the run was picked up mid-flight", () => {
@@ -97,5 +101,55 @@ describe("originOf", () => {
     // there isn't one to publish.
     expect(originOf({ title: "Vlny", originalTitle: null })).toBe("cz");
     expect(originOf({ title: "Odyssea", originalTitle: "The Odyssey" })).toBe("foreign");
+  });
+});
+
+describe("normalizeRun", () => {
+  it("treats UFD's week 0 as the opening, reindexed to 1", () => {
+    // 711 of 789 week-0 films open there; dropping it lost the real premiere.
+    const out = normalizeRun([point(0, 21_323, 21_323), point(1, 23_523, 47_000)]);
+    expect(out.map((p) => p.weekOfRun)).toEqual([1, 2]);
+    expect(out[0].weekendAdmissions).toBe(21_323);
+  });
+
+  it("drops an explicitly-numbered preview however large", () => {
+    const out = normalizeRun([point(-1, 32_299, 32_299), point(1, 56_944, 105_000)]);
+    expect(out.map((p) => p.weekOfRun)).toEqual([1]);
+  });
+
+  it("drops a tiny week-0 preview but keeps a full-size week-0 opening", () => {
+    expect(normalizeRun([point(0, 4_716, 4_716), point(1, 74_812, 80_000)])).toHaveLength(1);
+    expect(normalizeRun([point(0, 21_323, 21_323), point(1, 23_523, 47_000)])).toHaveLength(2);
+  });
+});
+
+describe("forecast with screen signals", () => {
+  const opening = (weekend: number, cinemas: number) => [
+    { weekOfRun: 1, weekendAdmissions: weekend, totalAdmissions: weekend, cinemas },
+  ];
+
+  it("projects a packed opening leggier than a thin one", () => {
+    // Same opening weekend, very different intensity per cinema.
+    const packed = forecast("cz", opening(60_000, 150))!; // 400/cinema
+    const thin = forecast("cz", opening(60_000, 600))!; // 100/cinema
+    expect(packed.total).toBeGreaterThan(thin.total);
+    expect(packed.strength).toBeGreaterThan(thin.strength!);
+  });
+
+  it("cuts the projection when planned screens are collapsing", () => {
+    const holding = forecast("foreign", [point(1, 100_000, 110_000), point(2, 60_000, 200_000)])!;
+    const losing = forecast(
+      "foreign",
+      [point(1, 100_000, 110_000), point(2, 60_000, 200_000)],
+      { plannedScreenRatio: 0.4 },
+    )!;
+    expect(losing.total).toBeLessThan(holding.total);
+    expect(losing.screenTrend).toBe(0.4);
+  });
+
+  it("ignores a planned ratio that is scraping noise", () => {
+    const f = forecast("foreign", [point(1, 100_000, 110_000)], { plannedScreenRatio: 0.01 })!;
+    // Clamped into the trusted band, not applied raw.
+    expect(f.screenTrend).toBe(0.3);
   });
 });

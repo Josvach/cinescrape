@@ -336,6 +336,30 @@ export function computeLive(state: State, history: History): Live {
   const todayRamp = rampAll.filter((b) => b.at.slice(0, 10) === today);
   const weekRamp = rampAll.filter((b) => b.at.slice(0, 10) >= weekFrom);
 
+  // --- planned-screen trend, from our own schedule --------------------------
+  // How a film's screen count is about to move: screenings booked for the next
+  // seven days against those in the last seven. This is the forward signal UFD
+  // cannot give, and it feeds the forecast's screen elasticity. A ratio built
+  // from our three-chain sample is robust where an absolute count would not be:
+  // the sampling fraction cancels top and bottom.
+  const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+  const screenWindow = new Map<number, { past: number; next: number }>();
+  for (const s of Object.values(state.screenings)) {
+    const t = new Date(s.startsAt).getTime();
+    const bucket = t >= now - WEEK_MS && t < now ? "past" : t >= now && t < now + WEEK_MS ? "next" : null;
+    if (!bucket) continue;
+    const w = screenWindow.get(s.filmId) ?? { past: 0, next: 0 };
+    w[bucket] += 1;
+    screenWindow.set(s.filmId, w);
+  }
+  // Too few screenings to trust a ratio is worse than no ratio at all.
+  const MIN_SCREENINGS_FOR_TREND = 8;
+  const plannedScreenRatio = (filmId: number): number | undefined => {
+    const w = screenWindow.get(filmId);
+    if (!w || w.past < MIN_SCREENINGS_FOR_TREND) return undefined;
+    return w.next / w.past;
+  };
+
   // --- official ------------------------------------------------------------
   const officialTotals = latestTotals(history);
   const series = runSeries(history);
@@ -358,7 +382,8 @@ export function computeLive(state: State, history: History): Live {
     const run = series.get(f.id);
     if (run?.points.length) {
       const origin = originOf({ country: run.country, title: f.title, originalTitle: f.originalTitle });
-      f.forecast = forecast(origin, run.points) ?? undefined;
+      f.forecast =
+        forecast(origin, run.points, { plannedScreenRatio: plannedScreenRatio(f.id) }) ?? undefined;
     }
   }
 

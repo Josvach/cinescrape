@@ -24,7 +24,7 @@
  * the code's shape (dropping Postgres took it to 2.0.0), this one tracks what
  * the phone is looking at.
  */
-export const VERSION = "Alpha 0.0.8";
+export const VERSION = "Alpha 0.0.9";
 
 const CZ = "cs-CZ";
 const nf = new Intl.NumberFormat(CZ);
@@ -113,10 +113,19 @@ const RATING_SOURCES = { csfd: "ČSFD", tmdb: "TMDB" };
  */
 function forecastBlock(p) {
   if (!p) return null;
+  // How the hold was arrived at: the film's own curve if it has two weekends,
+  // else the opening's per-cinema intensity, else the plain market average.
   const basis = p.measured
-    ? `z vlastního průběhu filmu — drží ${dec(p.strength ?? 1, 2)}× oproti trhu, ` +
-      `příští týden čekáme ${pct(p.hold)} předchozího víkendu`
-    : "z průměru trhu, film zatím nemá druhý víkend";
+    ? `z vlastního průběhu filmu — drží ${dec(p.strength ?? 1, 2)}× oproti trhu`
+    : p.strength != null
+      ? `podle síly startu (${dec(p.strength, 2)}× oproti trhu), film zatím nemá druhý víkend`
+      : "z průměru trhu, film zatím nemá druhý víkend";
+  // The live planned-screen signal, when scraping saw the schedule move.
+  const screens =
+    p.screenTrend != null && Math.abs(p.screenTrend - 1) >= 0.1
+      ? ` Naplánovaných projekcí na příští týden je ${p.screenTrend < 1 ? "méně" : "více"} ` +
+        `(${dec(p.screenTrend, 2)}× oproti tomuto), což odhad ${p.screenTrend < 1 ? "snižuje" : "zvyšuje"}.`
+      : "";
   return el("div", {},
     el("h3", { class: "sub" }, "Odhad celkového nasazení"),
     el("div", { class: "readout" },
@@ -124,7 +133,8 @@ function forecastBlock(p) {
       el("span", {}, `diváků · pásmo ${num(p.low)}–${num(p.high)}`)),
     el("p", { class: "caption", style: "margin:6px 0 0" },
       `Po ${p.weeks}. týdnu, ${basis}.` +
-      (p.multiplier ? ` To je ${dec(p.multiplier)}× úvodní víkend.` : "")),
+      (p.multiplier ? ` To je ${dec(p.multiplier)}× úvodní víkend.` : "") +
+      screens),
     el("div", { class: "notice" },
       "Osm z deseti filmů historicky skončilo uvnitř tohohle pásma. Čím dřív v nasazení, tím je širší."));
 }
