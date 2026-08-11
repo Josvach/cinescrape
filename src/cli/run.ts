@@ -22,7 +22,7 @@ import { discoverCineStarSchedule, pollCineStarHalls } from "@/ingest/cinestar";
 import { ingestGoldenApple } from "@/ingest/goldenapple";
 import { settleScreenings } from "@/ingest/settle";
 import { ingestUfd, isAwaitingReport, relinkUfd } from "@/ingest/ufd";
-import { computeLive } from "@/stats/compute";
+import { computeLive, recordForecasts } from "@/stats/compute";
 import { loadHistory, loadState, saveHistory, saveLive, saveState } from "@/store/store";
 
 /** Leaves room inside a five-minute tick for two chains and the write-back. */
@@ -51,8 +51,10 @@ async function backfill() {
     backfill: true,
   });
 
+  const live = computeLive(state, history);
+  recordForecasts(history, live);
   await saveHistory(history);
-  await saveLive(computeLive(state, history));
+  await saveLive(live);
 
   console.log(
     `backfill ${((Date.now() - startedAt) / 1000).toFixed(0)}s`,
@@ -212,9 +214,13 @@ async function once(withDiscovery: boolean) {
 
   // Written even if a source failed: a partial update is better than letting
   // the dashboard go stale, and the failure is reported below either way.
+  const live = computeLive(state, history);
+  // Log this run's forecasts before saving history, so the record of what the
+  // model said grows week by week for a later accuracy review.
+  recordForecasts(history, live);
   await saveState(state);
   await saveHistory(history);
-  await saveLive(computeLive(state, history));
+  await saveLive(live);
 
   const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
   console.log(`done in ${elapsed}s`, JSON.stringify(report));

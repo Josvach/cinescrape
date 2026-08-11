@@ -211,6 +211,32 @@ export type History = {
   ufdAnnual?: Record<string, UfdAnnualRecord>;
   /** ISO instant of the last successful UFD refresh. */
   ufdCheckedAt?: string;
+  /**
+   * The forecast made for each film at each weekly vintage, kept so the model
+   * can be judged against what actually happened.
+   *
+   * Keyed by film id; one entry per UFD weekend the estimate was based on. The
+   * UFD-only part of a past forecast can always be recomputed from the weekly
+   * archive, but the live planned-screen signal that fed it cannot — the
+   * schedule it read is gone by next week — so it is written down here as it
+   * was, ready for a later accuracy review.
+   */
+  forecasts?: Record<string, ForecastSnapshot[]>;
+};
+
+export type ForecastSnapshot = {
+  /** `YYYY-MM-DD` of the UFD weekend the forecast was based on. */
+  asOf: string;
+  /** Week of run at that point. */
+  weeks: number;
+  /** What we predicted the film would finish on. */
+  predicted: number;
+  low: number;
+  high: number;
+  /** The live planned-screen deviation applied, if any — not reconstructable later. */
+  screenTrend?: number;
+  /** ISO instant the snapshot was recorded. */
+  at: string;
 };
 
 export type UfdAnnualEntry = {

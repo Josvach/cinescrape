@@ -191,11 +191,26 @@ export type ForecastOptions = {
   plannedScreenRatio?: number;
 };
 
+/** One point on the cumulative-admissions curve, real or projected. */
+export type CurvePoint = {
+  /** Week of run, reindexed so the opening is 1. */
+  week: number;
+  /** Cumulative admissions by the end of that week. */
+  total: number;
+  /** True for the model's projection, false for what UFD actually reported. */
+  projected: boolean;
+};
+
 export type Forecast = {
   /** Best estimate of the film's final admissions. */
   total: number;
   /** Admissions already banked, which the forecast can never fall below. */
   soFar: number;
+  /**
+   * How attendance built and where it is heading: the cumulative total at each
+   * reported week, then the projected weeks the estimate is the sum of.
+   */
+  curve: CurvePoint[];
   /**
    * The hold the model expects next week — the table's rate for that week of
    * run, moved by how this film has actually been holding. Not the last
@@ -236,6 +251,13 @@ export type Forecast = {
    * one is holding better. Present only when a live schedule was supplied.
    */
   screenTrend?: number;
+  /**
+   * The estimate week by week — what the model would have said with only the
+   * official data available at each point. Shows whether the read of the film
+   * has been climbing or sliding as the weekends came in. Filled by the
+   * pipeline, not by `forecast()` itself.
+   */
+  trend?: { week: number; predicted: number }[];
 };
 
 /**
@@ -385,6 +407,14 @@ export function forecast(
         )
       : undefined;
 
+  // The curve begins with the cumulative total UFD reported at each real week,
+  // so the chart shows how attendance actually built, preview tickets included.
+  const curve: CurvePoint[] = points.map((p) => ({
+    week: p.weekOfRun,
+    total: Math.max(p.totalAdmissions, p.weekendAdmissions),
+    projected: false,
+  }));
+
   let remaining = 0;
   let weekend = last.weekendAdmissions;
   for (let week = 0; week < MAX_FURTHER_WEEKS; week++) {
@@ -393,6 +423,11 @@ export function forecast(
     weekend *= Math.min(rate, 0.95);
     if (weekend < MIN_WEEKEND_ADMISSIONS) break;
     remaining += weekend * uplift;
+    curve.push({
+      week: last.weekOfRun + week + 1,
+      total: Math.round(soFar + remaining),
+      projected: true,
+    });
   }
 
   const total = Math.round(soFar + remaining);
@@ -401,6 +436,7 @@ export function forecast(
   return {
     total,
     soFar,
+    curve,
     hold: Number(hold.toFixed(3)),
     strength: strength !== 1 ? Number(strength.toFixed(3)) : undefined,
     measured,

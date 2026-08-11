@@ -24,7 +24,7 @@
  * the code's shape (dropping Postgres took it to 2.0.0), this one tracks what
  * the phone is looking at.
  */
-export const VERSION = "Alpha 0.0.9";
+export const VERSION = "Alpha 0.0.10";
 
 const CZ = "cs-CZ";
 const nf = new Intl.NumberFormat(CZ);
@@ -128,11 +128,29 @@ function forecastBlock(p) {
       ? ` Projekcí ubývá ${p.screenTrend < 1 ? "rychleji" : "pomaleji"} než obvykle ` +
         `(${dec(p.screenTrend, 2)}× oproti běžnému tempu), což odhad ${p.screenTrend < 1 ? "snižuje" : "zvyšuje"}.`
       : "";
+  // How the estimate itself has moved week to week: up means we now think more
+  // of the film than the official data did a week ago, down means less.
+  let trend = null;
+  if (p.trend && p.trend.length >= 2) {
+    const prev = p.trend[p.trend.length - 2].predicted;
+    const delta = p.total - prev;
+    const rel = prev > 0 ? delta / prev : 0;
+    if (Math.abs(rel) >= 0.02) {
+      const up = delta > 0;
+      trend = el("span", { class: up ? "trend up" : "trend down" },
+        `${up ? "▲" : "▼"} odhad ${up ? "roste" : "klesá"} · minulý týden ${num(prev)}`);
+    } else {
+      trend = el("span", { class: "trend flat" }, `→ odhad se drží · minulý týden ${num(prev)}`);
+    }
+  }
+
   return el("div", {},
     el("h3", { class: "sub" }, "Odhad celkového nasazení"),
     el("div", { class: "readout" },
       el("b", {}, num(p.total)),
       el("span", {}, `diváků · pásmo ${num(p.low)}–${num(p.high)}`)),
+    trend && el("div", { style: "margin-top:4px" }, trend),
+    p.curve && forecastCurveChart(p.curve, p.low, p.high, `fc-${p.weeks}-${p.total}`),
     el("p", { class: "caption", style: "margin:6px 0 0" },
       `Po ${p.weeks}. týdnu, ${basis}.` +
       (p.multiplier ? ` To je ${dec(p.multiplier)}× úvodní víkend.` : "") +
@@ -348,6 +366,100 @@ function rampChart(points, uid, cumulative) {
       el("span", {}, "teď")),
     tableView(["Hodina", "Prodáno", "Celkem"],
       [...data].reverse().slice(0, 48).map((d) => [hourLabel(d.at), num(d.sold), num(d.cumulative)])));
+}
+
+/**
+ * Cumulative admissions over a film's run: how the total actually built, week
+ * by week, and where the model expects it to land.
+ *
+ * The real weeks (from UFD) are a solid line; the projection is dashed and
+ * carries the band with it, drawn as a cone that opens toward the final low-to-
+ * high range — the honest picture is that the further out the dashed line runs,
+ * the less certain it is.
+ */
+function forecastCurveChart(curve, low, high, uid) {
+  if (curve.length < 2) return null;
+
+  const W = 100, H = 46;
+  const weeks = curve.map((c) => c.week);
+  const minW = Math.min(...weeks), maxW = Math.max(...weeks);
+  const top = Math.max(high, ...curve.map((c) => c.total)) * 1.04;
+  const xs = (w) => (maxW === minW ? W / 2 : ((w - minW) / (maxW - minW)) * W);
+  const ys = (v) => H - (v / top) * (H - 2);
+
+  const lastReal = [...curve].filter((c) => !c.projected).at(-1) ?? curve[0];
+  const realPts = curve.filter((c) => !c.projected);
+  const projPts = curve.filter((c) => c.projected);
+  const line = (pts) => pts.map((c, i) => `${i ? "L" : "M"}${xs(c.week)} ${ys(c.total)}`).join(" ");
+
+  const svg = svgEl("svg", {
+    viewBox: `0 0 ${W} ${H}`, width: "100%", height: 128,
+    preserveAspectRatio: "none", role: "img",
+    "aria-label": "Vývoj celkové návštěvnosti a odhad",
+  });
+  const defs = svgEl("defs");
+  const grad = svgEl("linearGradient", { id: `fcfill-${uid}`, x1: 0, y1: 0, x2: 0, y2: 1 });
+  grad.append(
+    svgEl("stop", { offset: "0%", "stop-color": "var(--series-1)", "stop-opacity": 0.22 }),
+    svgEl("stop", { offset: "100%", "stop-color": "var(--series-1)", "stop-opacity": 0.02 }),
+  );
+  defs.append(grad);
+  svg.append(defs);
+
+  // Uncertainty cone: fans out from the last real point to the low-high band.
+  if (projPts.length) {
+    svg.append(svgEl("path", {
+      d: `M${xs(lastReal.week)} ${ys(lastReal.total)} L${xs(maxW)} ${ys(high)} ` +
+        `L${xs(maxW)} ${ys(low)} Z`,
+      fill: "var(--series-1)", opacity: 0.1,
+    }));
+  }
+
+  // Area under the real curve only, so the fill marks what actually happened.
+  if (realPts.length > 1) {
+    svg.append(svgEl("path", {
+      d: `${line(realPts)} L${xs(lastReal.week)} ${H} L${xs(realPts[0].week)} ${H} Z`,
+      fill: `url(#fcfill-${uid})`,
+    }));
+  }
+  if (projPts.length) {
+    svg.append(svgEl("path", {
+      d: `M${xs(lastReal.week)} ${ys(lastReal.total)} ${line(projPts)}`,
+      fill: "none", stroke: "var(--series-1)", "stroke-width": 2, "stroke-dasharray": "3 2.5",
+      "stroke-linejoin": "round", "stroke-linecap": "round", "vector-effect": "non-scaling-stroke",
+      opacity: 0.7,
+    }));
+  }
+  svg.append(svgEl("path", {
+    d: line(realPts), fill: "none", stroke: "var(--series-1)", "stroke-width": 2.4,
+    "stroke-linejoin": "round", "stroke-linecap": "round", "vector-effect": "non-scaling-stroke",
+  }));
+  // Mark the handover between measured and projected, and the two endpoints.
+  svg.append(svgEl("circle", {
+    cx: xs(lastReal.week), cy: ys(lastReal.total), r: 3.2, fill: "var(--series-1)",
+    stroke: "var(--surface-1)", "stroke-width": 2, "vector-effect": "non-scaling-stroke",
+  }));
+  const end = curve.at(-1);
+  if (end.projected) {
+    svg.append(svgEl("circle", {
+      cx: xs(end.week), cy: ys(end.total), r: 3, fill: "var(--surface-1)",
+      stroke: "var(--series-1)", "stroke-width": 2, "vector-effect": "non-scaling-stroke",
+    }));
+  }
+
+  return el("div", { style: "margin-top:10px" }, svg,
+    el("div", { class: "axis" },
+      el("span", {}, `${minW}. týden`),
+      el("span", {}, "dnes"),
+      el("span", {}, `odhad k ${maxW}. týdnu`)),
+    el("div", { class: "legend" },
+      el("span", { class: "key" },
+        el("i", { class: "swatch", style: "background:var(--series-1)" }), "skutečnost (UFD)"),
+      el("span", { class: "key" },
+        el("i", { class: "swatch", style: "background:repeating-linear-gradient(90deg,var(--series-1) 0 3px,transparent 3px 5px)" }),
+        "dopočet + pásmo")),
+    tableView(["Týden", "Celkem diváků", ""],
+      curve.map((c) => [`${c.week}.`, num(c.total), c.projected ? "odhad" : "UFD"])));
 }
 
 function tableView(head, rows) {

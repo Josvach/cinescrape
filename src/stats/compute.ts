@@ -18,8 +18,15 @@ import { recentCoverage } from "@/ingest/settle";
 import { allTimeRanking, latestTotals, runSeries, type AllTimeEntry } from "@/ingest/ufd";
 import { CHAIN_LABELS } from "@/lib/format";
 import { pragueDate } from "@/lib/time";
-import { forecast, originOf, type Forecast } from "./forecast";
-import type { Article, History, Rating, Screening as Stored, State } from "@/store/types";
+import { forecast, normalizeRun, originOf, type Forecast } from "./forecast";
+import type {
+  Article,
+  ForecastSnapshot,
+  History,
+  Rating,
+  Screening as Stored,
+  State,
+} from "@/store/types";
 
 // --- shared shapes ---------------------------------------------------------
 
@@ -384,8 +391,25 @@ export function computeLive(state: State, history: History): Live {
     const run = series.get(f.id);
     if (run?.points.length) {
       const origin = originOf({ country: run.country, title: f.title, originalTitle: f.originalTitle });
-      f.forecast =
-        forecast(origin, run.points, { plannedScreenRatio: plannedScreenRatio(f.id) }) ?? undefined;
+      const current = forecast(origin, run.points, { plannedScreenRatio: plannedScreenRatio(f.id) });
+      if (current) {
+        // How the estimate has moved as official data came in: the same model
+        // run against the film's own series truncated to each week. Official
+        // data only, so the whole line is one apples-to-apples series — the
+        // week 1 read, the week 2 read, and so on — and the direction of it is
+        // whether we now think more or less of the film than a week ago.
+        const clean = normalizeRun(run.points);
+        current.trend = clean.map((_, i) => {
+          // The final point is the live headline — screen signal and all — so
+          // the line ends where the number above it stands. Earlier points are
+          // the official-data read at each past week, which is all we can
+          // reconstruct now.
+          if (i === clean.length - 1) return { week: current.weeks, predicted: current.total };
+          const past = forecast(origin, clean.slice(0, i + 1));
+          return past ? { week: past.weeks, predicted: past.total } : null;
+        }).filter((g): g is { week: number; predicted: number } => g !== null);
+        f.forecast = current;
+      }
     }
   }
 
@@ -476,4 +500,36 @@ export function computeLive(state: State, history: History): Live {
     films: [...films.values()].sort((a, b) => b.week.admissions - a.week.admissions),
     coverage: recentCoverage(state, history, 7),
   };
+}
+
+/**
+ * Write down each film's current forecast, one snapshot per weekly vintage.
+ *
+ * Called after `computeLive`, so it captures what the model said this run —
+ * including the live planned-screen signal, which is gone by next week and
+ * cannot be recovered. Keyed by the UFD weekend the estimate was based on, so
+ * the same vintage is updated in place through the week rather than piling up,
+ * and one clean entry per week survives for a later accuracy review.
+ */
+export function recordForecasts(history: History, live: Live, now: Date = new Date()): void {
+  history.forecasts ??= {};
+  for (const f of live.films) {
+    const p = f.forecast;
+    if (!p || !f.official) continue;
+    const log: ForecastSnapshot[] = (history.forecasts[String(f.id)] ??= []);
+    const entry: ForecastSnapshot = {
+      asOf: f.official.asOf,
+      weeks: p.weeks,
+      predicted: p.total,
+      low: p.low,
+      high: p.high,
+      screenTrend: p.screenTrend,
+      at: now.toISOString(),
+    };
+    const existing = log.findIndex((s) => s.asOf === entry.asOf);
+    if (existing >= 0) log[existing] = entry;
+    else log.push(entry);
+    // A run finishes inside a season; there is no need to keep years of it.
+    if (log.length > 40) log.splice(0, log.length - 40);
+  }
 }

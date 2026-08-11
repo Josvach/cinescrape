@@ -220,6 +220,14 @@
       h3.sub { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); font-weight: 620; margin: 15px 0 3px; }
       svg { display: block; overflow: visible; }
 
+      /* Whether the estimate is rising or falling week to week. Blue up, orange
+         down — the same two hues the charts use, so nothing new to learn, and
+         both are already validated for light and dark. */
+      .trend { font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 560; }
+      .trend.up { color: var(--series-1); }
+      .trend.down { color: var(--series-2); }
+      .trend.flat { color: var(--text-muted); }
+
       .masthead { padding: 4px 0 14px; }
       .masthead h1 { font-size: 21px; font-weight: 660; letter-spacing: -0.015em; margin: 0; line-height: 1.25; }
 
