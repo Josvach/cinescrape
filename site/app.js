@@ -24,7 +24,7 @@
  * the code's shape (dropping Postgres took it to 2.0.0), this one tracks what
  * the phone is looking at.
  */
-export const VERSION = "Alpha 0.0.10";
+export const VERSION = "Alpha 0.0.11";
 
 const CZ = "cs-CZ";
 const nf = new Intl.NumberFormat(CZ);
@@ -155,6 +155,12 @@ function forecastBlock(p) {
       `Po ${p.weeks}. týdnu, ${basis}.` +
       (p.multiplier ? ` To je ${dec(p.multiplier)}× úvodní víkend.` : "") +
       screens),
+    // How the estimate itself has moved, week by week — a separate chart from
+    // the attendance curve above: this one plots what we predicted each week.
+    p.trend && p.trend.length >= 2 &&
+      el("div", {},
+        el("h3", { class: "sub" }, "Vývoj odhadu po týdnech"),
+        predictionTrendChart(p.trend, `pt-${p.weeks}-${p.total}`)),
     el("div", { class: "notice" },
       "Osm z deseti filmů historicky skončilo uvnitř tohohle pásma. Čím dřív v nasazení, tím je širší."));
 }
@@ -460,6 +466,85 @@ function forecastCurveChart(curve, low, high, uid) {
         "dopočet + pásmo")),
     tableView(["Týden", "Celkem diváků", ""],
       curve.map((c) => [`${c.week}.`, num(c.total), c.projected ? "odhad" : "UFD"])));
+}
+
+/**
+ * How the estimate itself changed, week by week.
+ *
+ * A line of the predicted final admissions at each week of run — this is the
+ * "45 000 then 30 000 then …" the producer wants to watch: is our read of the
+ * film climbing or sliding as the weekends come in. Not cumulative attendance
+ * (that is the chart above); this is the forecast's own history.
+ *
+ * The y-axis does not start at zero — the whole point is to see the movement,
+ * and a zero baseline would flatten a swing that matters into a straight line.
+ */
+function predictionTrendChart(trend, uid) {
+  if (trend.length < 2) return null;
+
+  const W = 100, H = 40;
+  const vals = trend.map((t) => t.predicted);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const pad = (hi - lo) * 0.25 || hi * 0.1 || 1;
+  const yMin = lo - pad, yMax = hi + pad;
+  const xs = (i) => (i / (trend.length - 1)) * W;
+  const ys = (v) => H - ((v - yMin) / (yMax - yMin)) * (H - 4) - 2;
+  const path = trend.map((t, i) => `${i ? "L" : "M"}${xs(i)} ${ys(t.predicted)}`).join(" ");
+
+  const readout = el("div", { class: "readout" });
+  const strong = el("b");
+  const note = el("span");
+  readout.append(strong, note);
+
+  const svg = svgEl("svg", {
+    viewBox: `0 0 ${W} ${H}`, width: "100%", height: 110,
+    preserveAspectRatio: "none", role: "img", "aria-label": "Vývoj odhadu po týdnech",
+  });
+  const defs = svgEl("defs");
+  const grad = svgEl("linearGradient", { id: `ptfill-${uid}`, x1: 0, y1: 0, x2: 0, y2: 1 });
+  grad.append(
+    svgEl("stop", { offset: "0%", "stop-color": "var(--series-2)", "stop-opacity": 0.2 }),
+    svgEl("stop", { offset: "100%", "stop-color": "var(--series-2)", "stop-opacity": 0.02 }),
+  );
+  defs.append(grad);
+  svg.append(defs);
+  svg.append(svgEl("path", { d: `${path} L${W} ${H} L0 ${H} Z`, fill: `url(#ptfill-${uid})` }));
+  svg.append(svgEl("path", {
+    d: path, fill: "none", stroke: "var(--series-2)", "stroke-width": 2.2,
+    "stroke-linejoin": "round", "stroke-linecap": "round", "vector-effect": "non-scaling-stroke",
+  }));
+  // A dot per week, the last one filled to mark the current estimate.
+  trend.forEach((t, i) => {
+    svg.append(svgEl("circle", {
+      cx: xs(i), cy: ys(t.predicted), r: i === trend.length - 1 ? 3.4 : 2.4,
+      fill: i === trend.length - 1 ? "var(--series-2)" : "var(--surface-1)",
+      stroke: "var(--series-2)", "stroke-width": 2, "vector-effect": "non-scaling-stroke",
+    }));
+  });
+
+  const show = (i) => {
+    const t = trend[i];
+    strong.textContent = num(t.predicted);
+    const prev = i > 0 ? trend[i - 1].predicted : null;
+    const arrow = prev == null ? "" : t.predicted > prev ? " ▲" : t.predicted < prev ? " ▼" : " →";
+    note.textContent = `odhad po ${t.week}. týdnu${arrow}`;
+  };
+  const hit = svgEl("rect", { x: 0, y: 0, width: W, height: H, fill: "transparent" });
+  const move = (clientX, target) => {
+    const box = target.getBoundingClientRect();
+    show(Math.max(0, Math.min(trend.length - 1, Math.round(((clientX - box.left) / box.width) * (trend.length - 1)))));
+  };
+  hit.addEventListener("mousemove", (e) => move(e.clientX, e.currentTarget));
+  hit.addEventListener("touchmove", (e) => { move(e.touches[0].clientX, e.currentTarget); e.preventDefault(); }, { passive: false });
+  hit.addEventListener("mouseleave", () => show(trend.length - 1));
+  svg.append(hit);
+  show(trend.length - 1);
+
+  return el("div", {}, readout, svg,
+    el("div", { class: "axis" },
+      el("span", {}, `${trend[0].week}. týden`),
+      el("span", {}, `${trend[trend.length - 1].week}. týden`)),
+    tableView(["Týden", "Odhad diváků"], trend.map((t) => [`${t.week}.`, num(t.predicted)])));
 }
 
 function tableView(head, rows) {
