@@ -24,7 +24,7 @@
  * the code's shape (dropping Postgres took it to 2.0.0), this one tracks what
  * the phone is looking at.
  */
-export const VERSION = "Alpha 0.0.12";
+export const VERSION = "Alpha 0.0.13";
 
 const CZ = "cs-CZ";
 const nf = new Intl.NumberFormat(CZ);
@@ -102,6 +102,96 @@ const tile = (label, value, note) =>
 const tiles = (...items) => el("div", { class: "tiles" }, items.filter(Boolean));
 
 const RATING_SOURCES = { csfd: "ČSFD", tmdb: "TMDB" };
+
+// ---------------------------------------------------------------- alerts
+//
+// A live notification of a watched film's admissions. There is no push server,
+// so the worker does the checking: while the app is open the page pings it
+// after every refresh, and a periodic background sync covers the app being
+// closed where the platform allows one. The watch list is shared with the
+// worker through IndexedDB. See sw.js for the delivery side.
+
+const ALERT_DB = "cinescrape-alerts", ALERT_STORE = "watch";
+/** Ids currently watched, mirrored from IndexedDB so the button reads sync. */
+let WATCHED = new Set();
+
+function alertDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(ALERT_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(ALERT_STORE, { keyPath: "id" });
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function alertAll() {
+  const db = await alertDb();
+  return new Promise((res, rej) => {
+    const r = db.transaction(ALERT_STORE, "readonly").objectStore(ALERT_STORE).getAll();
+    r.onsuccess = () => res(r.result || []);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function alertWrite(mode, fn) {
+  const db = await alertDb();
+  return new Promise((res, rej) => {
+    const t = db.transaction(ALERT_STORE, "readwrite");
+    fn(t.objectStore(ALERT_STORE));
+    t.oncomplete = res;
+    t.onerror = () => rej(t.error);
+  });
+}
+
+async function pingWorker(msg) {
+  if (!("serviceWorker" in navigator)) return;
+  const reg = await navigator.serviceWorker.ready.catch(() => null);
+  reg?.active?.postMessage(msg);
+}
+
+/** Ask the worker to refresh every watched film's notification. */
+async function refreshAlerts() {
+  if (WATCHED.size > 0) await pingWorker("check");
+}
+
+/** Turn a film's live notification on or off, handling permission and sync. */
+async function toggleWatch(film) {
+  if (WATCHED.has(film.id)) {
+    WATCHED.delete(film.id);
+    await alertWrite("readwrite", (s) => s.delete(film.id));
+    await pingWorker({ clear: film.id });
+  } else {
+    if (!("Notification" in window)) {
+      alert("Tento prohlížeč neumí oznámení.");
+      return;
+    }
+    const perm = Notification.permission === "granted"
+      ? "granted"
+      : await Notification.requestPermission();
+    if (perm !== "granted") {
+      alert("Oznámení jsou zakázaná. Povol je v nastavení stránky a zkus to znovu.");
+      return;
+    }
+    WATCHED.add(film.id);
+    await alertWrite("readwrite", (s) => s.put({ id: film.id, title: film.title }));
+    // Best-effort background delivery; foreground works regardless.
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      await reg.periodicSync?.register("films", { minInterval: 30 * 60 * 1000 });
+    } catch {}
+    await pingWorker("check"); // show it straight away
+  }
+  render();
+}
+
+/** The watch toggle shown on a film. */
+function watchButton(film) {
+  if (!("serviceWorker" in navigator) || !("Notification" in window)) return null;
+  const on = WATCHED.has(film.id);
+  return el("button", {
+    class: on ? "watch on" : "watch",
+    onclick: () => toggleWatch(film),
+  }, on ? "🔔 Sleduji živě — vypnout" : "🔔 Sledovat živě");
+}
+
 
 /**
  * Projected final admissions.
@@ -735,7 +825,8 @@ function filmScreen(d, id, tab) {
     el("header", { class: "masthead" },
       el("h1", {}, f.title, ratingChip(f.rating))),
     f.originalTitle && f.originalTitle !== f.title &&
-      el("p", { class: "subtitle" }, f.originalTitle));
+      el("p", { class: "subtitle" }, f.originalTitle),
+    watchButton(f));
 
   if (tab === "week") {
     const days = d.week.days.map((day) => ({
@@ -915,6 +1006,8 @@ async function load() {
     LIVE = await res.json();
     state = readHash();
     render();
+    // Fresh numbers are in; nudge the worker so watched notifications update.
+    refreshAlerts();
   } catch (err) {
     app.replaceChildren(
       card("Data se nenačetla", String(err),
@@ -924,7 +1017,20 @@ async function load() {
   }
 }
 
-load();
+// Register the worker and read the watch list before the first paint, so the
+// bell shows the right state. A failure here only costs notifications, never
+// the dashboard, so it is swallowed.
+async function init() {
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).catch(() => {});
+  }
+  try {
+    WATCHED = new Set((await alertAll()).map((w) => w.id));
+  } catch {}
+  await load();
+}
+
+init();
 addEventListener("visibilitychange", () => {
   if (!document.hidden) load();
 });

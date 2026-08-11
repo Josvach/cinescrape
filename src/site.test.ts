@@ -27,6 +27,16 @@ describe("site/index.html", () => {
     expect(() => execFileSync(process.execPath, ["--check", file])).not.toThrow();
   });
 
+  it("ships a service worker that parses", () => {
+    // The worker delivers the film-admission notifications and has no build
+    // step either, so a stray syntax error would only surface on a phone.
+    const sw = readFileSync(fileURLToPath(new URL("../site/sw.js", import.meta.url)), "utf8");
+    const file = join(mkdtempSync(join(tmpdir(), "cinescrape-sw-")), "sw.js");
+    writeFileSync(file, sw);
+    expect(() => execFileSync(process.execPath, ["--check", file])).not.toThrow();
+    expect(script).toContain('register("sw.js"');
+  });
+
   it("only fetches its own data file", () => {
     // A strict-CSP host and an offline phone both punish an external request.
     const urls = script.match(/fetch\(\s*[`"'][^`"']+/g) ?? [];

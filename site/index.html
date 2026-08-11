@@ -223,6 +223,16 @@
       /* Whether the estimate is rising or falling week to week. Blue up, orange
          down — the same two hues the charts use, so nothing new to learn, and
          both are already validated for light and dark. */
+      /* Watch toggle: a live admissions notification for this film. */
+      .watch {
+        display: inline-flex; align-items: center; gap: 6px; margin-top: 10px;
+        background: var(--surface-2); border: 1px solid var(--border); color: var(--text-primary);
+        border-radius: 999px; padding: 7px 14px; font: inherit; font-size: 13px; font-weight: 560;
+        cursor: pointer; -webkit-tap-highlight-color: transparent;
+      }
+      .watch:active { opacity: 0.6; }
+      .watch.on { background: var(--series-1); border-color: var(--series-1); color: #fff; }
+
       .trend { font-size: 12px; font-variant-numeric: tabular-nums; font-weight: 560; }
       .trend.up { color: var(--series-1); }
       .trend.down { color: var(--series-2); }
