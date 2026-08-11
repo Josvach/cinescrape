@@ -24,7 +24,7 @@
  * the code's shape (dropping Postgres took it to 2.0.0), this one tracks what
  * the phone is looking at.
  */
-export const VERSION = "Alpha 0.0.13";
+export const VERSION = "Alpha 0.0.14";
 
 const CZ = "cs-CZ";
 const nf = new Intl.NumberFormat(CZ);
