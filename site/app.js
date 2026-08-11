@@ -24,7 +24,7 @@
  * the code's shape (dropping Postgres took it to 2.0.0), this one tracks what
  * the phone is looking at.
  */
-export const VERSION = "Alpha 0.0.11";
+export const VERSION = "Alpha 0.0.12";
 
 const CZ = "cs-CZ";
 const nf = new Intl.NumberFormat(CZ);
@@ -389,9 +389,15 @@ function forecastCurveChart(curve, low, high, uid) {
   const W = 100, H = 46;
   const weeks = curve.map((c) => c.week);
   const minW = Math.min(...weeks), maxW = Math.max(...weeks);
-  const top = Math.max(high, ...curve.map((c) => c.total)) * 1.04;
+  // Scale to the estimate line, not the band. Early on the band high can be
+  // twice the point estimate, and letting it set the ceiling squashed the real
+  // curve into a flat strip along the bottom. The cone still shows the band, but
+  // its top is clamped to the chart so it cannot drive the scale off the page.
+  const curveMax = Math.max(...curve.map((c) => c.total));
+  const top = Math.min(high * 1.05, curveMax * 1.6);
+  const coneHigh = Math.min(high, top);
   const xs = (w) => (maxW === minW ? W / 2 : ((w - minW) / (maxW - minW)) * W);
-  const ys = (v) => H - (v / top) * (H - 2);
+  const ys = (v) => H - (Math.min(v, top) / top) * (H - 2);
 
   const lastReal = [...curve].filter((c) => !c.projected).at(-1) ?? curve[0];
   const realPts = curve.filter((c) => !c.projected);
@@ -412,10 +418,11 @@ function forecastCurveChart(curve, low, high, uid) {
   defs.append(grad);
   svg.append(defs);
 
-  // Uncertainty cone: fans out from the last real point to the low-high band.
+  // Uncertainty cone: fans out from the last real point to the low-high band,
+  // the high vertex clamped to the chart top.
   if (projPts.length) {
     svg.append(svgEl("path", {
-      d: `M${xs(lastReal.week)} ${ys(lastReal.total)} L${xs(maxW)} ${ys(high)} ` +
+      d: `M${xs(lastReal.week)} ${ys(lastReal.total)} L${xs(maxW)} ${ys(coneHigh)} ` +
         `L${xs(maxW)} ${ys(low)} Z`,
       fill: "var(--series-1)", opacity: 0.1,
     }));
@@ -456,8 +463,7 @@ function forecastCurveChart(curve, low, high, uid) {
   return el("div", { style: "margin-top:10px" }, svg,
     el("div", { class: "axis" },
       el("span", {}, `${minW}. týden`),
-      el("span", {}, "dnes"),
-      el("span", {}, `odhad k ${maxW}. týdnu`)),
+      el("span", {}, `nyní ${lastReal.week}. týden · odhad k ${maxW}.`)),
     el("div", { class: "legend" },
       el("span", { class: "key" },
         el("i", { class: "swatch", style: "background:var(--series-1)" }), "skutečnost (UFD)"),

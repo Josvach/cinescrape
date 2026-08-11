@@ -338,6 +338,10 @@ export function forecast(
 
   const last = points[points.length - 1];
   if (!last || last.weekendAdmissions <= 0) return null;
+  // A film whose only report so far is a preview — everything below week one —
+  // has no opening weekend to forecast from. Predicting off it produced a "week
+  // -1" estimate and a chart axis running to "week 0".
+  if (last.weekOfRun < 1) return null;
 
   const soFar = Math.max(last.totalAdmissions, last.weekendAdmissions);
 

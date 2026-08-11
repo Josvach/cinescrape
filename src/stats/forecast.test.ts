@@ -81,6 +81,13 @@ describe("forecast", () => {
     expect(forecast("cz", [point(1, 0, 0)])).toBeNull();
   });
 
+  it("refuses a preview-only run, before there is any opening weekend", () => {
+    // A film UFD has only listed in preview (week -1) has no opening to forecast
+    // from; predicting off it produced a "week -1" estimate and a broken chart.
+    expect(forecast("foreign", [point(-1, 3_000, 3_000)])).toBeNull();
+    expect(forecast("cz", [point(-2, 500, 500), point(-1, 800, 1_300)])).toBeNull();
+  });
+
   it("caps a film that grew week on week rather than extrapolating to infinity", () => {
     // Holiday weeks really do rise; a hold above 1 compounded forever would not.
     const f = forecast("cz", [point(1, 50_000, 55_000), point(2, 65_000, 150_000)])!;
