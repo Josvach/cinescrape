@@ -28,6 +28,14 @@ const TIERS = [
 const FAR_FUTURE_INTERVAL_MS = 12 * HOUR;
 
 /**
+ * How soon to look again at a reading we are not willing to believe yet.
+ *
+ * Short enough that a confirmation still lands well before showtime, long
+ * enough that a hall CineStar has taken off sale has a chance to come back.
+ */
+export const RECHECK_INTERVAL_MS = 5 * MINUTE;
+
+/**
  * Returns the next poll time, or null when the screening is past and should
  * leave the queue.
  */
@@ -46,6 +54,18 @@ export function nextPollAt(startsAt: Date, now: Date = new Date()): Date | null 
   if (candidate > lastChance) return new Date(Math.max(now.getTime(), lastChance));
 
   return new Date(candidate);
+}
+
+/**
+ * Next poll for a screening we want to look at again sooner than its tier
+ * cadence — a reading that needs confirming. Never later than the regular
+ * cadence, and never after showtime.
+ */
+export function recheckPollAt(startsAt: Date, now: Date = new Date()): Date | null {
+  const regular = nextPollAt(startsAt, now);
+  if (!regular) return null;
+  const sooner = now.getTime() + RECHECK_INTERVAL_MS;
+  return sooner < regular.getTime() ? new Date(sooner) : regular;
 }
 
 /** How much we trust a settled figure, given when its snapshot was captured. */

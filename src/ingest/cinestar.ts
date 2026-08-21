@@ -21,14 +21,15 @@ import {
   fetchHall,
   fetchProgramme,
   normalizeEvent,
+  type Occupancy,
   readOccupancy,
   type ScheduledEvent,
   versionFromProperties,
 } from "@/sources/cinestar";
 import { recordReading, resolveFilm, upsertCinema, upsertHall, upsertScreening } from "@/store/mutations";
-import { key, type State } from "@/store/types";
+import { key, type Screening, type State } from "@/store/types";
 
-import { nextPollAt } from "@/core/schedule";
+import { nextPollAt, recheckPollAt } from "@/core/schedule";
 
 /** Minimum gap between requests to api.cinestar.cz. */
 const REQUEST_INTERVAL_MS = 350;
@@ -259,20 +260,95 @@ function registerScreening(state: State, c: Candidate, filmId: number): void {
 export type CsPollResult = {
   polled: number;
   gone: number;
+  /** Readings that found nothing on sale and are waiting for a second look. */
+  unconfirmed: number;
   queued: number;
   errors: string[];
 };
+
+/**
+ * Is this reading of the seating plan believable as it stands?
+ *
+ * A plan where not one seat is on sale is the payload CineStar returns both
+ * for a sold-out house and for a screening it has temporarily withdrawn from
+ * sale — the seats are all OCCUPIED either way. Anděl's Sál 1 read 138/138
+ * five hours before an all-but-empty 15:20 show, so the two are worth telling
+ * apart: a real sell-out is still full at the next look, a withdrawn screening
+ * is back on sale or stops being readable at all.
+ */
+export const needsConfirming = (occ: { seatsSold: number; seatsTotal: number }): boolean =>
+  occ.seatsTotal > 0 && occ.seatsSold >= occ.seatsTotal;
+
+/**
+ * Take one reading of a screening's seating plan.
+ *
+ * Returns `"held"` when the plan showed nothing on sale for the first time:
+ * nothing is written down, and the screening is queued for a second look a few
+ * minutes later. A house that is genuinely sold out still reads full then and
+ * is recorded on that second reading, a few minutes late and correct.
+ *
+ * Exported so the hold can be checked without standing up a whole poll run.
+ */
+export function applyHallReading(
+  state: State,
+  screening: Screening,
+  occ: Occupancy,
+  now = new Date(),
+): "recorded" | "held" {
+  const startsAt = new Date(screening.startsAt);
+
+  if (needsConfirming(occ)) {
+    if (!screening.fullSeenAt) {
+      // Hold the reading back rather than booking a hall's worth of admissions
+      // we may be about to unsee — including into the sales ramp, which only
+      // ever counts increases and so could not take them back.
+      screening.fullSeenAt = now.toISOString();
+      screening.nextPollAt = recheckPollAt(startsAt, now)?.toISOString() ?? null;
+      return "held";
+    }
+  } else {
+    delete screening.fullSeenAt;
+  }
+
+  recordReading(state, screening, {
+    sold: occ.seatsSold,
+    total: occ.seatsTotal,
+    at: now,
+    priceMin: occ.priceMin,
+    priceMax: occ.priceMax,
+  });
+  screening.nextPollAt = nextPollAt(startsAt, now)?.toISOString() ?? null;
+  return "recorded";
+}
+
+/**
+ * A screening stopped being readable.
+ *
+ * Permanent once it has started — which `nextPollAt` already says by returning
+ * null — but before then it also happens to a screening the cinema has pulled
+ * from sale for a while, and those come back. Keeping it in the queue at the
+ * usual cadence is what lets a reading taken during such a gap be corrected;
+ * dropping it froze an empty hall at 138/138 for good.
+ */
+export function applyEventGone(screening: Screening, now = new Date()): void {
+  screening.nextPollAt = nextPollAt(new Date(screening.startsAt), now)?.toISOString() ?? null;
+}
 
 export async function pollCineStarHalls(
   state: State,
   opts: { deadline: number; batchSize?: number },
 ): Promise<CsPollResult> {
-  const result: CsPollResult = { polled: 0, gone: 0, queued: 0, errors: [] };
+  const result: CsPollResult = { polled: 0, gone: 0, unconfirmed: 0, queued: 0, errors: [] };
   const now = Date.now();
 
   const due = Object.entries(state.screenings)
-    .filter(([, s]) => s.chain === "cinestar" && s.nextPollAt !== null)
-    .filter(([, s]) => new Date(s.nextPollAt!).getTime() <= now)
+    .filter(([, s]) => s.chain === "cinestar" && !s.settled)
+    // Occupancy stops being readable the moment a screening starts, so
+    // showtime — not a stored poll time — is what takes it out of the queue.
+    // Anything still ahead of us is eligible, which also picks up a screening
+    // whose scheduled poll was dropped while it was briefly unreadable.
+    .filter(([, s]) => new Date(s.startsAt).getTime() > now)
+    .filter(([, s]) => s.nextPollAt === null || new Date(s.nextPollAt).getTime() <= now)
     // Soonest showtime first — those are the readings we cannot retake.
     .sort((a, b) => a[1].startsAt.localeCompare(b[1].startsAt))
     .slice(0, opts.batchSize ?? 400);
@@ -285,21 +361,12 @@ export async function pollCineStarHalls(
       const externalId = k.slice("cinestar:".length);
       try {
         const hall = await fetchHall(externalId);
-        const occ = readOccupancy(hall);
-        recordReading(state, screening, {
-          sold: occ.seatsSold,
-          total: occ.seatsTotal,
-          priceMin: occ.priceMin,
-          priceMax: occ.priceMax,
-        });
-        screening.nextPollAt =
-          nextPollAt(new Date(screening.startsAt), new Date())?.toISOString() ?? null;
-        result.polled += 1;
+        const outcome = applyHallReading(state, screening, readOccupancy(hall));
+        if (outcome === "held") result.unconfirmed += 1;
+        else result.polled += 1;
       } catch (err) {
         if (err instanceof EventGoneError) {
-          // Sales are closed. Leave the queue and let settle decide the final
-          // figure from whatever we already captured.
-          screening.nextPollAt = null;
+          applyEventGone(screening);
           result.gone += 1;
           return;
         }

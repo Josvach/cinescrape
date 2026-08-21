@@ -114,6 +114,16 @@ export type Screening = {
   soldOut: boolean;
   priceMin: number | null;
   priceMax: number | null;
+  /**
+   * ISO instant of a reading that found no seat on sale, held back until a
+   * second reading confirms it.
+   *
+   * CineStar returns a seating plan with every seat OCCUPIED while a screening
+   * is temporarily off sale, which is indistinguishable from a sold-out house
+   * in a single reading. Recording the first one turned an empty Premium hall
+   * into 138/138. Cleared as soon as a seat is on sale again.
+   */
+  fullSeenAt?: string;
   settled?: Settled;
 };
 

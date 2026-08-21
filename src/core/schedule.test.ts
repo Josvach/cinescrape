@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { nextPollAt, settleConfidence } from "./schedule";
+import { RECHECK_INTERVAL_MS, nextPollAt, recheckPollAt, settleConfidence } from "./schedule";
 
 const now = new Date("2026-07-31T10:00:00Z");
 const at = (offsetMs: number) => new Date(now.getTime() + offsetMs);
@@ -41,6 +41,23 @@ describe("nextPollAt", () => {
       const next = nextPollAt(startsAt, now)!;
       expect(next.getTime()).toBeLessThan(startsAt.getTime());
     }
+  });
+});
+
+describe("recheckPollAt", () => {
+  it("looks again sooner than the tier cadence", () => {
+    expect(recheckPollAt(at(6 * HOUR), now)!.getTime() - now.getTime()).toBe(RECHECK_INTERVAL_MS);
+  });
+
+  it("never delays a poll the cadence would have taken sooner", () => {
+    // Inside the last minutes the regular clamp is already tighter than a
+    // recheck, and the final snapshot must not be pushed past showtime.
+    const startsAt = at(3 * MINUTE);
+    expect(recheckPollAt(startsAt, now)!.getTime()).toBe(nextPollAt(startsAt, now)!.getTime());
+  });
+
+  it("drops a past screening out of the queue", () => {
+    expect(recheckPollAt(at(-MINUTE), now)).toBeNull();
   });
 });
 

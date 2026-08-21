@@ -119,6 +119,16 @@ uzavřená projekce nese `confidence`: `final`, `partial`, nebo `missed` — a
 1 request na projekci. Poller proto nikdy nezkouší frontu vyprázdnit; běží
 dokud mu nedojde rozpočet a zbytek dobere příští tik.
 
+**Plná mapa neznamená vyprodáno.** Když CineStar projekci dočasně stáhne z
+prodeje, `hall/get` vrátí úplně stejnou odpověď jako u vyprodaného sálu: všechna
+sedadla ve stavu `OCCUPIED`. Prázdný Premium sál v Andělu se tak na dashboardu
+ukázal jako 138/138. Odečet, ve kterém není v prodeji ani jedno sedadlo, se
+proto nezapisuje hned — projekce se za pár minut přečte znovu a zapíše se, až
+když je plná i podruhé (`applyHallReading`). Vyprodaný sál to zdrží o jeden
+odečet, stažený z prodeje to zachytí. Ze stejného důvodu `E_API_EVENT_NOT_SHARED`
+před začátkem projekce frontu neopouští: „nečitelná teď" je trvalé až po začátku
+představení, předtím je to obvykle jen pauza v prodeji.
+
 **Do rampy se počítá jen přírůstek.** Každý odečet se porovná s předchozím a do
 hodinového kbelíku se přičte jen rozdíl. První odečet projekce se nepočítá
 vůbec — to, co se prodalo, než jsme se dívali, není prodej za tuhle hodinu.
